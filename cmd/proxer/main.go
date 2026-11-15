@@ -76,7 +76,7 @@ func main() {
 				os.Exit(1)
 			}
 
-			resultJSON, err := tools.PerformSearch(db, keyword)
+			resultJSON, err := tools.PerformSearch(db, root, keyword)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, err.Error())
 				os.Exit(1)
