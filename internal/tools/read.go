@@ -11,24 +11,23 @@ import (
 
 // PerformRead returns the requested line range of a file. The path is resolved
 // against root but echoed back as given, so agents can chain read and edit
-// calls with the same spelling they already have in context.
+// calls with the same spelling they already have in context. The hash covers
+// the whole file, so edit can tell whether anything shifted since the read.
 func PerformRead(root, path string, startLine, endLine int) (string, error) {
 	resolved, err := resolvePath(root, path)
 	if err != nil {
 		return "", err
 	}
 
-	if _, err := os.Stat(resolved); os.IsNotExist(err) {
-		return "", fmt.Errorf("file '%s' not found. It may have been deleted", path)
-	}
-
-	file, err := os.Open(resolved)
+	data, err := os.ReadFile(resolved)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("file '%s' not found. It may have been deleted", path)
+		}
 		return "", fmt.Errorf("failed to open file: %w", err)
 	}
-	defer file.Close()
 
-	scanner := bufio.NewScanner(file)
+	scanner := bufio.NewScanner(bytes.NewReader(data))
 	var contentBuilder bytes.Buffer
 	currentLine := 1
 
@@ -51,6 +50,7 @@ func PerformRead(root, path string, startLine, endLine int) (string, error) {
 		Root:     root,
 		Filepath: path,
 		Content:  contentBuilder.String(),
+		Hash:     contentHash(data),
 	}
 
 	out, err := encodeJSON(result)

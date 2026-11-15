@@ -82,6 +82,7 @@ func TestToolsSuite(t *testing.T) {
 		var result domain.ReadResultJSON
 		require.NoError(t, json.Unmarshal([]byte(resultJSON), &result))
 		assert.Equal(t, root, result.Root, "a read result must name the index it came from")
+		assert.Len(t, result.Hash, 64, "a read result must carry a sha256 of the file")
 
 		_, err = tools.PerformRead(root, "missing.go", 1, 5)
 		assert.Error(t, err)
