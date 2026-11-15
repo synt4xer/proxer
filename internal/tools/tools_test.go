@@ -116,6 +116,27 @@ func TestToolsSuite(t *testing.T) {
 		assert.NotContains(t, staleResult, "We need to change this logic later")
 	})
 
+	t.Run("PerformEditReindexesOnlyTheEditedFile", func(t *testing.T) {
+		// A sentinel row that no full rebuild would survive: if edit still
+		// rebuilt the whole index, this row would vanish.
+		_, err := db.Exec(
+			"INSERT INTO chunk_search (id, filepath, start_line, end_line, content) VALUES (?, ?, ?, ?, ?)",
+			"other.go:1-1", "other.go", 1, 1, "sentinel xyzzy",
+		)
+		require.NoError(t, err)
+
+		_, err = tools.PerformEdit(db, root, "main.go", 1, 1, "package main // touched")
+		require.NoError(t, err)
+
+		var untouched int
+		require.NoError(t, db.QueryRow("SELECT COUNT(*) FROM chunk_search WHERE filepath = ?", "other.go").Scan(&untouched))
+		assert.Equal(t, 1, untouched, "editing one file must not rebuild the rest of the index")
+
+		var counted int
+		require.NoError(t, db.QueryRow("SELECT COUNT(*) FROM chunk_search WHERE filepath = ?", "main.go").Scan(&counted))
+		assert.Equal(t, 1, counted, "the edited file must not be duplicated in the index")
+	})
+
 	t.Run("PerformEditRejectsOutOfRange", func(t *testing.T) {
 		_, err := tools.PerformEdit(db, root, "main.go", 900, 901, "x")
 		require.Error(t, err)

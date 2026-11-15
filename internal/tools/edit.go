@@ -49,14 +49,14 @@ func PerformEdit(db *sqlx.DB, root, path string, startLine, endLine int, newCont
 		return "", fmt.Errorf("failed to save file: %w", err)
 	}
 
-	err = indexer.IndexProject(db, root)
+	err = indexer.ReindexFile(db, root, resolved)
 	if err != nil {
-		return "", fmt.Errorf("file saved, but auto-index failed: %w", err)
+		return "", fmt.Errorf("file saved, but reindexing it failed: %w", err)
 	}
 
 	successMsg := map[string]string{
 		"status":  "success",
-		"message": fmt.Sprintf("Successfully replaced lines %d-%d in %s and auto-updated the search index.", startLine, endLine, path),
+		"message": fmt.Sprintf("Successfully replaced lines %d-%d in %s and reindexed it.", startLine, endLine, path),
 	}
 	out, err := json.Marshal(successMsg)
 	if err != nil {
