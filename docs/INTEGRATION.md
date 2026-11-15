@@ -4,7 +4,7 @@ Proxer fits an agent harness in two ways: as an Agent Skill invoked through the 
 
 ## Agent Skills
 
-`skills/proxer/SKILL.md` follows the [Agent Skills specification](https://agentskills.io/specification), so any harness that discovers `.agents/skills/<name>/SKILL.md` picks Proxer up with no further configuration. Pi, Claude Code, and other Agent Skills implementations read the same layout.
+`skills/proxer/SKILL.md` follows the [Agent Skills specification](https://agentskills.io/specification), so any harness that discovers `.agents/skills/<name>/SKILL.md` picks Proxer up with no further configuration. Agent Skills implementations such as Claude Code and Pi read the same layout.
 
 `make install` already places the package in the right location, so integration is just:
 
@@ -22,7 +22,7 @@ Proxer exposes no protocol server by default: the harness invokes the binary dir
 
 The server resolves the root the same way the CLI does (`--root`, then `PROXER_ROOT`, then the working directory), opens `<root>/.proxer.db` for its lifetime, and closes it on shutdown. It writes only JSON-RPC to stdout; errors go to stderr. Every `filepath` argument is relative to the project root, and a path that resolves outside it is rejected, never clamped or rewritten. Every `search` and `read` result carries the absolute `root` it came from, so a harness talking to several projects can tell which index a path belongs to. `read` also returns a `hash` of the whole file: pass it to `edit` and a change in between rejects the edit instead of overwriting code the model has not seen.
 
-Register it per project. Pi reads project servers from `.pi/mcp.json` and user servers from `~/.pi/agent/mcp.json`:
+Register it per project, using the config file your harness reads. The shape below is common to MCP clients; extra keys vary by harness.
 
 ```json
 {
@@ -30,17 +30,16 @@ Register it per project. Pi reads project servers from `.pi/mcp.json` and user s
     "proxer": {
       "command": ".agents/skills/proxer/scripts/proxer",
       "args": ["mcp", "--root", "."],
-      "cwd": ".",
-      "exposure": "direct",
-      "description": "Search, read, and edit this project through the proxer index"
+      "cwd": "."
     }
   }
 }
 ```
 
-`exposure: "direct"` publishes each tool as `mcp__proxer__<tool>`. Without it a harness may hide the tools behind code-mode search. The equivalent command:
+Pi is one example. It reads project servers from `.pi/mcp.json` and user servers from `~/.pi/agent/mcp.json`, and its `exposure: "direct"` key publishes each tool as `mcp__proxer__<tool>` instead of hiding it behind code-mode search. A harness that offers a command can register the same server from a shell:
 
 ```bash
+# Pi
 pi mcp add -l proxer -- .agents/skills/proxer/scripts/proxer mcp --root .
 ```
 

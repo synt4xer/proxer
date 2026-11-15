@@ -186,7 +186,7 @@ Which one to pick:
 
 Start with the project-local skill. Add the MCP server when the harness supports it, and reach for the global skill only when per-project copies become a burden.
 
-Setup for both, including a per-project `.pi/mcp.json`, lives in [docs/INTEGRATION.md](docs/INTEGRATION.md).
+Setup for both, including a worked project-scoped MCP config, lives in [docs/INTEGRATION.md](docs/INTEGRATION.md).
 
 ## Limitations
 
