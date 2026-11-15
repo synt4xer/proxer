@@ -49,6 +49,7 @@ func PerformRead(root, path string, startLine, endLine int) (string, error) {
 	}
 
 	result := domain.ReadResultJSON{
+		Root:     root,
 		Filepath: path,
 		Content:  contentBuilder.String(),
 	}

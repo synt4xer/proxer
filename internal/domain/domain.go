@@ -8,12 +8,14 @@ type SearchResultDB struct {
 }
 
 type SearchResultJSON struct {
+	Root     string `json:"root"`
 	Filepath string `json:"filepath"`
 	Line     string `json:"line"`
 	Snippet  string `json:"snippet"`
 }
 
 type ReadResultJSON struct {
+	Root     string `json:"root"`
 	Filepath string `json:"filepath"`
 	Content  string `json:"content"`
 }
