@@ -14,8 +14,17 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-func InitDB() (*sqlx.DB, error) {
-	db, err := sqlx.Connect("sqlite", config.DBFile)
+// InitDB opens the index database at dbPath and creates the FTS5 table when it
+// is missing. The path is a parameter because the index belongs to a project
+// root, not to whatever directory the process happens to run in.
+func InitDB(dbPath string) (*sqlx.DB, error) {
+	if dir := filepath.Dir(dbPath); dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, fmt.Errorf("failed to create the index directory: %w", err)
+		}
+	}
+
+	db, err := sqlx.Connect("sqlite", dbPath)
 	if err != nil {
 		return nil, err
 	}

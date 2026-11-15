@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/synt4xer/proxer/internal/config"
 	"github.com/synt4xer/proxer/internal/indexer"
 	"github.com/synt4xer/proxer/internal/tools"
 )
@@ -41,7 +42,7 @@ func TestToolsSuite(t *testing.T) {
 	defer os.Chdir(originalWD)
 
 	// 1. Setup DB and Index the mock workspace
-	db, err := indexer.InitDB()
+	db, err := indexer.InitDB(config.DBFile)
 	require.NoError(t, err)
 	defer db.Close()
 

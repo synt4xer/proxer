@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/synt4xer/proxer/internal/config"
 	"github.com/synt4xer/proxer/internal/indexer"
 )
 
@@ -40,7 +41,7 @@ func hello() {
 	require.NoError(t, err)
 
 	// 3. Test Database Initialization
-	db, err := indexer.InitDB()
+	db, err := indexer.InitDB(config.DBFile)
 	require.NoError(t, err, "InitDB should not produce an error")
 	defer db.Close()
 

@@ -7,6 +7,7 @@ import (
 
 	"github.com/jmoiron/sqlx"
 	"github.com/spf13/cobra"
+	"github.com/synt4xer/proxer/internal/config"
 	"github.com/synt4xer/proxer/internal/indexer"
 	"github.com/synt4xer/proxer/internal/tools"
 )
@@ -19,7 +20,7 @@ func main() {
 		Short: "Project Indexer - Local codebase retriever and editor for AI Agents",
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
 			var err error
-			db, err = indexer.InitDB()
+			db, err = indexer.InitDB(config.DBFile)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Failed to initialize DB: %v\n", err)
 				os.Exit(1)
