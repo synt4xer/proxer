@@ -223,7 +223,7 @@ func TestJSONOutputIsNotHTMLEscaped(t *testing.T) {
 	require.NoError(t, indexer.IndexProject(db, root))
 
 	t.Run("searchKeepsSnippetTagsLiteral", func(t *testing.T) {
-		resultJSON, err := tools.PerformSearch(db, "ProcessData")
+		resultJSON, err := tools.PerformSearch(db, root, "ProcessData")
 		require.NoError(t, err)
 		assert.Contains(t, resultJSON, "<b>ProcessData</b>")
 		assert.NotContains(t, resultJSON, `\u003c`)
