@@ -34,6 +34,7 @@ internal/domain/     Result models
 internal/config/     Indexing limits and allowlists
 internal/filesystem/ Indexability predicates
 internal/indexer/    SQLite FTS5 store and chunking
+internal/mcpserver/  MCP stdio server exposing the operations as tools
 internal/tools/      Search, read, and edit operations
 skills/proxer/       Agent Skill package (installed into the target project)
 ```
@@ -83,6 +84,7 @@ Results are printed as JSON on stdout; failures go to stderr with a non-zero exi
 | `search -k <keyword>` | Return up to 5 matching chunks with `filepath`, `line`, and `snippet`. |
 | `read -f <file> -s <start> -e <end>` | Return the inclusive line range as JSON. |
 | `edit -f <file> -s <start> -e <end>` | Replace the range with stdin content, then reindex that file. |
+| `mcp` | Serve all four operations as MCP tools over stdio. |
 
 ### Initialize
 
@@ -143,4 +145,39 @@ EOF
 
 The skill body teaches the agent the order of operations: `index` first, then `search` → `read` → `edit`. Keep `SKILL.md` in sync with the CLI flags whenever they change.
 
-Proxer exposes no protocol server: the harness invokes the binary directly. MCP server mode is not implemented yet.
+Proxer exposes no protocol server by default: the harness invokes the binary directly. If the harness speaks MCP, run it as a server instead (below).
+
+### MCP Server
+
+`proxer mcp` runs a stdio [MCP](https://modelcontextprotocol.io) server that exposes the four operations as tools named `index`, `search`, `read`, and `edit`. Use it when the harness speaks MCP and you want the tools in the agent's tool list rather than invoked as shell commands. The CLI and the Agent Skill keep working unchanged.
+
+The server resolves the root the same way the CLI does (`--root`, then `PROXER_ROOT`, then the working directory), opens `<root>/.proxer.db` for its lifetime, and closes it on shutdown. It writes only JSON-RPC to stdout; errors go to stderr. Every `filepath` argument is relative to the project root, and a path that resolves outside it is rejected, never clamped or rewritten.
+
+Register it per project. Pi reads project servers from `.pi/mcp.json` and user servers from `~/.pi/agent/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "proxer": {
+      "command": ".agents/skills/proxer/scripts/proxer",
+      "args": ["mcp", "--root", "."],
+      "cwd": ".",
+      "exposure": "direct",
+      "description": "Search, read, and edit this project through the proxer index"
+    }
+  }
+}
+```
+
+`exposure: "direct"` publishes each tool as `mcp__proxer__<tool>`. Without it a harness may hide the tools behind code-mode search. The equivalent command:
+
+```bash
+pi mcp add -l proxer -- .agents/skills/proxer/scripts/proxer mcp --root .
+```
+
+| Tool | Parameters | Result |
+| --- | --- | --- |
+| `index` | none | `{"status":"indexed_successfully"}` |
+| `search` | `keyword` | array of `{filepath, line, snippet}` |
+| `read` | `filepath`, `start` (default 1), `end` (default 60) | `{filepath, content}` |
+| `edit` | `filepath`, `start`, `end`, `content` | `{status, message}` |
