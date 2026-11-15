@@ -22,7 +22,7 @@ func IsIndexableDir(path string, info fs.FileInfo) bool {
 	if path == "." || name == "." {
 		return true
 	}
-	if contains(config.IgnoredDirs, name) {
+	if contains(config.DefaultIgnoredDirs, name) {
 		return false
 	}
 	return true
