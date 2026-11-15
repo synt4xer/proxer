@@ -63,6 +63,19 @@ func TestToolsSuite(t *testing.T) {
 		assert.Equal(t, "[]", emptyJSON)
 	})
 
+	t.Run("PerformSearchSanitizesInput", func(t *testing.T) {
+		// Raw FTS5 syntax must never reach the parser as an error
+		for _, keyword := range []string{"ProcessData(", "AND", "*", `"quoted`, "middleware?"} {
+			_, err := tools.PerformSearch(db, keyword)
+			require.NoError(t, err, "keyword %q produced an error", keyword)
+		}
+
+		// Punctuation-only input degrades to an empty result set
+		resultJSON, err := tools.PerformSearch(db, "()*&^%")
+		require.NoError(t, err)
+		assert.Equal(t, "[]", resultJSON)
+	})
+
 	// --- 3. Test PerformRead ---
 	t.Run("PerformRead", func(t *testing.T) {
 		resultJSON, err := tools.PerformRead("main.go", 4, 5)
