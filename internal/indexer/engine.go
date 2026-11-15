@@ -14,8 +14,22 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-func InitDB() (*sqlx.DB, error) {
-	db, err := sqlx.Connect("sqlite", config.DBFile)
+const insertChunkSQL = `
+	INSERT INTO chunk_search (id, filepath, start_line, end_line, content)
+	VALUES (?, ?, ?, ?, ?)
+`
+
+// InitDB opens the index database at dbPath and creates the FTS5 table when it
+// is missing. The path is a parameter because the index belongs to a project
+// root, not to whatever directory the process happens to run in.
+func InitDB(dbPath string) (*sqlx.DB, error) {
+	if dir := filepath.Dir(dbPath); dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, fmt.Errorf("failed to create the index directory: %w", err)
+		}
+	}
+
+	db, err := sqlx.Connect("sqlite", dbPath)
 	if err != nil {
 		return nil, err
 	}
@@ -41,23 +55,27 @@ func InitDB() (*sqlx.DB, error) {
 	return db, nil
 }
 
+// IndexProject rebuilds the entire index for rootPath. Chunks are keyed by
+// their path inside the project, so indexing an absolute root and indexing a
+// relative one produce the same database.
 func IndexProject(db *sqlx.DB, rootPath string) error {
-	db.MustExec("DELETE FROM chunk_search")
-
 	tx, err := db.Beginx()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 
-	insertQuery := `INSERT INTO chunk_search (id, filepath, start_line, end_line, content) VALUES ($1, $2, $3, $4, $5)`
-	stmt, err := tx.Preparex(insertQuery)
+	if _, err := tx.Exec("DELETE FROM chunk_search"); err != nil {
+		return fmt.Errorf("failed to clear the index: %w", err)
+	}
+
+	stmt, err := tx.Preparex(insertChunkSQL)
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 
-	filepath.WalkDir(rootPath, func(path string, d fs.DirEntry, err error) error {
+	walkErr := filepath.WalkDir(rootPath, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
@@ -68,7 +86,9 @@ func IndexProject(db *sqlx.DB, rootPath string) error {
 		}
 
 		if d.IsDir() {
-			if !filesystem.IsIndexableDir(path, info) {
+			// The root itself is never skipped: an ignored directory name such
+			// as "build" is legitimate when it is the project being indexed.
+			if path != rootPath && !filesystem.IsIndexableDir(path, info) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -78,33 +98,129 @@ func IndexProject(db *sqlx.DB, rootPath string) error {
 			return nil
 		}
 
-		contentBytes, err := os.ReadFile(path)
+		// A file that disappears or cannot be read mid-walk is skipped rather
+		// than aborting the whole rebuild.
+		content, err := os.ReadFile(path)
 		if err != nil {
 			return nil
 		}
 
-		lines := strings.Split(string(contentBytes), "\n")
-		totalLines := len(lines)
-		step := config.ChunkSize - config.OverlapSize
-
-		for i := 0; i < totalLines; i += step {
-			startLine := i + 1
-			endLine := i + config.ChunkSize
-			if endLine > totalLines {
-				endLine = totalLines
-			}
-
-			chunkContent := strings.Join(lines[startLine-1:endLine], "\n")
-			id := fmt.Sprintf("%s:%d-%d", path, startLine, endLine)
-			stmt.MustExec(id, path, startLine, endLine, chunkContent)
-
-			if endLine >= totalLines {
-				break
-			}
+		rel, err := relativePath(rootPath, path)
+		if err != nil {
+			return err
 		}
 
-		return nil
+		return insertChunks(stmt, rel, string(content))
 	})
+	if walkErr != nil {
+		return walkErr
+	}
 
 	return tx.Commit()
+}
+
+// ReindexFile replaces the stored chunks of a single file. Editing a file only
+// shifts line numbers inside that file, so every other row in the index stays
+// valid and never has to be rebuilt.
+func ReindexFile(db *sqlx.DB, rootPath, path string) error {
+	rel, err := relativePath(rootPath, path)
+	if err != nil {
+		return err
+	}
+
+	tx, err := db.Beginx()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if err := deleteChunks(tx, rel); err != nil {
+		return err
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// The file is gone, so dropping its chunks is the whole job.
+			return tx.Commit()
+		}
+		return fmt.Errorf("failed to read %s: %w", rel, err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("failed to stat %s: %w", rel, err)
+	}
+	if !filesystem.IsIndexableFile(info) {
+		// The file grew past the size limit or lost an indexable extension:
+		// it must no longer be reachable through search.
+		return tx.Commit()
+	}
+
+	stmt, err := tx.Preparex(insertChunkSQL)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	if err := insertChunks(stmt, rel, string(content)); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
+// deleteChunks drops every row stored under rel. FTS5 tables have no secondary
+// indexes, so the delete scans the table, which is still far cheaper than
+// rebuilding the whole project.
+func deleteChunks(tx *sqlx.Tx, rel string) error {
+	if _, err := tx.Exec("DELETE FROM chunk_search WHERE filepath = ?", rel); err != nil {
+		return fmt.Errorf("failed to drop stale chunks for %s: %w", rel, err)
+	}
+	return nil
+}
+
+// insertChunks splits content into overlapping windows and stores each window
+// under rel. Callers produce rel once so every path in the index has the same
+// shape regardless of how the root was supplied.
+func insertChunks(stmt *sqlx.Stmt, rel, content string) error {
+	lines := strings.Split(content, "\n")
+	totalLines := len(lines)
+	step := config.ChunkSize - config.OverlapSize
+
+	for i := 0; i < totalLines; i += step {
+		startLine := i + 1
+		endLine := i + config.ChunkSize
+		if endLine > totalLines {
+			endLine = totalLines
+		}
+
+		chunkContent := strings.Join(lines[startLine-1:endLine], "\n")
+		id := fmt.Sprintf("%s:%d-%d", rel, startLine, endLine)
+
+		if _, err := stmt.Exec(id, rel, startLine, endLine, chunkContent); err != nil {
+			return fmt.Errorf("failed to store chunk %s: %w", id, err)
+		}
+
+		if endLine >= totalLines {
+			break
+		}
+	}
+
+	return nil
+}
+
+// relativePath keys a file by its location inside the project. Absolute keys
+// would break as soon as the project moves, and mixed absolute and relative
+// keys would prevent single-file reindexing from finding its own rows.
+func relativePath(rootPath, path string) (string, error) {
+	if rootPath == "" {
+		rootPath = "."
+	}
+
+	rel, err := filepath.Rel(rootPath, path)
+	if err != nil {
+		return "", fmt.Errorf("failed to relativize %s against %s: %w", path, rootPath, err)
+	}
+	return filepath.ToSlash(rel), nil
 }

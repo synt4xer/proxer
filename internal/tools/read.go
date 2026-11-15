@@ -10,12 +10,17 @@ import (
 	"github.com/synt4xer/proxer/internal/domain"
 )
 
-func PerformRead(path string, startLine, endLine int) (string, error) {
-	if _, err := os.Stat(path); os.IsNotExist(err) {
+// PerformRead returns the requested line range of a file. The path is resolved
+// against root but echoed back as given, so agents can chain read and edit
+// calls with the same spelling they already have in context.
+func PerformRead(root, path string, startLine, endLine int) (string, error) {
+	resolved := resolvePath(root, path)
+
+	if _, err := os.Stat(resolved); os.IsNotExist(err) {
 		return "", fmt.Errorf("file '%s' not found. It may have been deleted", path)
 	}
 
-	file, err := os.Open(path)
+	file, err := os.Open(resolved)
 	if err != nil {
 		return "", fmt.Errorf("failed to open file: %w", err)
 	}

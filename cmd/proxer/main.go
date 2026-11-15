@@ -4,22 +4,36 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/spf13/cobra"
+	"github.com/synt4xer/proxer/internal/config"
 	"github.com/synt4xer/proxer/internal/indexer"
 	"github.com/synt4xer/proxer/internal/tools"
 )
 
 func main() {
 	var db *sqlx.DB
+	var root string
 
 	var rootCmd = &cobra.Command{
 		Use:   "proxer",
 		Short: "Project Indexer - Local codebase retriever and editor for AI Agents",
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
-			var err error
-			db, err = indexer.InitDB()
+			rootFlag, err := cmd.Flags().GetString("root")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to read the root flag: %v\n", err)
+				os.Exit(1)
+			}
+
+			root, err = config.ResolveRoot(rootFlag)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to resolve the project root: %v\n", err)
+				os.Exit(1)
+			}
+
+			db, err = indexer.InitDB(filepath.Join(root, config.DBFile))
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Failed to initialize DB: %v\n", err)
 				os.Exit(1)
@@ -31,12 +45,13 @@ func main() {
 			}
 		},
 	}
+	rootCmd.PersistentFlags().String("root", "", "Project root to index and search (default: $"+config.RootEnvVar+", then the current directory)")
 
 	var indexCmd = &cobra.Command{
 		Use:   "index",
 		Short: "Scan and index the local directory",
 		Run: func(cmd *cobra.Command, args []string) {
-			if err := indexer.IndexProject(db, "."); err != nil {
+			if err := indexer.IndexProject(db, root); err != nil {
 				fmt.Fprintf(os.Stderr, "Indexing failed: %v\n", err)
 				os.Exit(1)
 			}
@@ -76,7 +91,7 @@ func main() {
 				os.Exit(1)
 			}
 
-			resultJSON, err := tools.PerformRead(filepathFlag, startLine, endLine)
+			resultJSON, err := tools.PerformRead(root, filepathFlag, startLine, endLine)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, err.Error())
 				os.Exit(1)
@@ -105,7 +120,7 @@ func main() {
 				os.Exit(1)
 			}
 
-			resultJSON, err := tools.PerformEdit(db, editFilepath, editStart, editEnd, string(newContentBytes))
+			resultJSON, err := tools.PerformEdit(db, root, editFilepath, editStart, editEnd, string(newContentBytes))
 			if err != nil {
 				fmt.Fprintln(os.Stderr, err.Error())
 				os.Exit(1)
