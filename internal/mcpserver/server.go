@@ -19,15 +19,16 @@ Paths passed to read and edit are relative to the project root; absolute paths i
 
 // Server serves one MCP client against one project root.
 type Server struct {
-	db   *sqlx.DB
-	root string
-	mcp  *mcp.Server
+	db          *sqlx.DB
+	root        string
+	ignoredDirs []string
+	mcp         *mcp.Server
 }
 
 // New builds the MCP server for a project root. The caller owns db and must
-// keep it open until Run returns.
-func New(db *sqlx.DB, root string) *Server {
-	s := &Server{db: db, root: root}
+// keep it open until Run returns. ignoredDirs is the project's index skip list.
+func New(db *sqlx.DB, root string, ignoredDirs []string) *Server {
+	s := &Server{db: db, root: root, ignoredDirs: ignoredDirs}
 	s.mcp = mcp.NewServer(
 		&mcp.Implementation{Name: "proxer", Version: Version},
 		&mcp.ServerOptions{Instructions: instructions},

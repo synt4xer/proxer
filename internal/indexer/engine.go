@@ -83,7 +83,7 @@ func InitDB(dbPath string) (*sqlx.DB, error) {
 // IndexProject rebuilds the entire index for rootPath. Chunks are keyed by
 // their path inside the project, so indexing an absolute root and indexing a
 // relative one produce the same database.
-func IndexProject(db *sqlx.DB, rootPath string) error {
+func IndexProject(db *sqlx.DB, rootPath string, ignoredDirs []string) error {
 	tx, err := db.Beginx()
 	if err != nil {
 		return err
@@ -113,7 +113,7 @@ func IndexProject(db *sqlx.DB, rootPath string) error {
 		if d.IsDir() {
 			// The root itself is never skipped: an ignored directory name such
 			// as "build" is legitimate when it is the project being indexed.
-			if path != rootPath && !filesystem.IsIndexableDir(path, info) {
+			if path != rootPath && !filesystem.IsIndexableDir(path, info, ignoredDirs) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -147,7 +147,7 @@ func IndexProject(db *sqlx.DB, rootPath string) error {
 // ReindexFile replaces the stored chunks of a single file. Editing a file only
 // shifts line numbers inside that file, so every other row in the index stays
 // valid and never has to be rebuilt.
-func ReindexFile(db *sqlx.DB, rootPath, path string) error {
+func ReindexFile(db *sqlx.DB, rootPath, path string, ignoredDirs []string) error {
 	rel, err := relativePath(rootPath, path)
 	if err != nil {
 		return err
@@ -161,6 +161,12 @@ func ReindexFile(db *sqlx.DB, rootPath, path string) error {
 
 	if err := deleteChunks(tx, rel); err != nil {
 		return err
+	}
+
+	if filesystem.PathHasIgnoredDir(rel, ignoredDirs) {
+		// The file lives under a directory the project ignores, so editing it
+		// directly must not smuggle it back into the index.
+		return tx.Commit()
 	}
 
 	content, err := os.ReadFile(path)

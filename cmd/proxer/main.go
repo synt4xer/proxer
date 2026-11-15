@@ -58,7 +58,7 @@ func main() {
 		Use:   "index",
 		Short: "Scan and index the local directory",
 		Run: func(cmd *cobra.Command, args []string) {
-			if err := indexer.IndexProject(db, root); err != nil {
+			if err := indexer.IndexProject(db, root, config.DefaultIgnoredDirs); err != nil {
 				fmt.Fprintf(os.Stderr, "Indexing failed: %v\n", err)
 				os.Exit(1)
 			}
@@ -128,7 +128,7 @@ func main() {
 				os.Exit(1)
 			}
 
-			resultJSON, err := tools.PerformEdit(db, root, editFilepath, editStart, editEnd, string(newContentBytes), editHash)
+			resultJSON, err := tools.PerformEdit(db, root, editFilepath, editStart, editEnd, string(newContentBytes), editHash, config.DefaultIgnoredDirs)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, err.Error())
 				os.Exit(1)

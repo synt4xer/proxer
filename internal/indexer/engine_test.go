@@ -41,7 +41,7 @@ func TestIndexerEngine(t *testing.T) {
 	require.NoError(t, db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='chunk_search'").Scan(&tableName))
 	assert.Equal(t, "chunk_search", tableName)
 
-	require.NoError(t, indexer.IndexProject(db, root), "IndexProject should complete without errors")
+	require.NoError(t, indexer.IndexProject(db, root, config.DefaultIgnoredDirs), "IndexProject should complete without errors")
 
 	var count int
 	require.NoError(t, db.QueryRow("SELECT COUNT(*) FROM chunk_search").Scan(&count))
@@ -69,7 +69,7 @@ func TestIndexProjectStoresIdenticalPathsForAbsoluteAndRelativeRoots(t *testing.
 		db, err := indexer.InitDB(filepath.Join(root, config.DBFile))
 		require.NoError(t, err)
 
-		require.NoError(t, indexer.IndexProject(db, candidate))
+		require.NoError(t, indexer.IndexProject(db, candidate, config.DefaultIgnoredDirs))
 
 		var rows []string
 		require.NoError(t, db.Select(&rows, "SELECT filepath FROM chunk_search ORDER BY filepath"))
@@ -93,9 +93,26 @@ func TestIndexProjectHandlesIgnoredDirectoryAsRoot(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	require.NoError(t, indexer.IndexProject(db, root))
+	require.NoError(t, indexer.IndexProject(db, root, config.DefaultIgnoredDirs))
 
 	var count int
 	require.NoError(t, db.QueryRow("SELECT COUNT(*) FROM chunk_search").Scan(&count))
 	assert.Equal(t, 1, count)
+}
+
+func TestIndexProjectHonorsAProjectSkipList(t *testing.T) {
+	root := newWorkspace(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "generated"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "generated", "gen.go"), []byte("func Gen() {}\n"), 0o644))
+
+	db, err := indexer.InitDB(filepath.Join(root, config.DBFile))
+	require.NoError(t, err)
+	defer db.Close()
+
+	ignored := append(append([]string{}, config.DefaultIgnoredDirs...), "generated")
+	require.NoError(t, indexer.IndexProject(db, root, ignored))
+
+	var count int
+	require.NoError(t, db.QueryRow("SELECT COUNT(*) FROM chunk_search WHERE filepath LIKE 'generated/%'").Scan(&count))
+	assert.Zero(t, count, "a directory on the project skip list must not be indexed")
 }

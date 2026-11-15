@@ -42,7 +42,7 @@ func TestIsIndexableDir(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			info := mockFileInfo{name: tt.dirName, isDir: true}
-			result := filesystem.IsIndexableDir(tt.path, info)
+			result := filesystem.IsIndexableDir(tt.path, info, config.DefaultIgnoredDirs)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -68,6 +68,36 @@ func TestIsIndexableFile(t *testing.T) {
 			info := mockFileInfo{name: tt.fileName, size: tt.fileSize, isDir: false}
 			result := filesystem.IsIndexableFile(info)
 			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestIsIndexableDirHonorsAProjectSkipList(t *testing.T) {
+	ignored := append(append([]string{}, config.DefaultIgnoredDirs...), "third_party")
+
+	info := mockFileInfo{name: "third_party", isDir: true}
+	assert.False(t, filesystem.IsIndexableDir("third_party", info, ignored))
+	assert.True(t, filesystem.IsIndexableDir("third_party", info, config.DefaultIgnoredDirs),
+		"a name outside the effective list must stay indexable")
+}
+
+func TestPathHasIgnoredDir(t *testing.T) {
+	tests := []struct {
+		name     string
+		path     string
+		expected bool
+	}{
+		{name: "RootFile", path: "main.go", expected: false},
+		{name: "CleanSubdir", path: "internal/pkg/file.go", expected: false},
+		{name: "IgnoredDirectly", path: "generated/file.go", expected: true},
+		{name: "IgnoredAtDepth", path: "internal/generated/file.go", expected: true},
+		{name: "IgnoredNameAsFile", path: "pkg/generated", expected: false},
+	}
+
+	ignored := append(append([]string{}, config.DefaultIgnoredDirs...), "generated")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, filesystem.PathHasIgnoredDir(tt.path, ignored))
 		})
 	}
 }

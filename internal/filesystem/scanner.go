@@ -17,15 +17,30 @@ func contains(slice []string, item string) bool {
 	return false
 }
 
-func IsIndexableDir(path string, info fs.FileInfo) bool {
+// IsIgnoredDirName reports whether a directory name is one the index must skip.
+// Names are matched whole, at any depth.
+func IsIgnoredDirName(name string, ignoredDirs []string) bool {
+	return contains(ignoredDirs, name)
+}
+
+// PathHasIgnoredDir reports whether any directory segment of a root-relative
+// path is ignored. The last segment is a file name and is not checked.
+func PathHasIgnoredDir(relPath string, ignoredDirs []string) bool {
+	segments := strings.Split(filepath.ToSlash(relPath), "/")
+	for _, dir := range segments[:len(segments)-1] {
+		if IsIgnoredDirName(dir, ignoredDirs) {
+			return true
+		}
+	}
+	return false
+}
+
+func IsIndexableDir(path string, info fs.FileInfo, ignoredDirs []string) bool {
 	name := info.Name()
 	if path == "." || name == "." {
 		return true
 	}
-	if contains(config.DefaultIgnoredDirs, name) {
-		return false
-	}
-	return true
+	return !IsIgnoredDirName(name, ignoredDirs)
 }
 
 func IsIndexableFile(info fs.FileInfo) bool {
