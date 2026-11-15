@@ -83,8 +83,8 @@ Results are printed as JSON on stdout; failures go to stderr with a non-zero exi
 | --- | --- |
 | `index` | Rebuild `.proxer.db` from the project tree. |
 | `search -k <keyword>` | Return up to 5 matching chunks with `root`, `filepath`, `line`, and `snippet`. |
-| `read -f <file> -s <start> -e <end>` | Return `root`, `filepath`, and the inclusive line range as JSON. |
-| `edit -f <file> -s <start> -e <end>` | Replace the range with stdin content, then reindex that file. |
+| `read -f <file> -s <start> -e <end>` | Return `root`, `filepath`, the inclusive line range, and the file `hash` as JSON. |
+| `edit -f <file> -s <start> -e <end> [--hash <hash>]` | Replace the range with stdin content, then reindex that file. |
 | `mcp` | Serve all four operations as MCP tools over stdio. |
 
 ### Initialize
@@ -119,7 +119,9 @@ From outside the project, name the root instead of changing directory:
 ./.agents/skills/proxer/scripts/proxer read -f "internal/auth.go" -s 40 -e 70
 ```
 
-The result is `{"root": "...", "filepath": "...", "content": "..."}`; `root` is the absolute path of the indexed project and `filepath` is echoed as given.
+The result is `{"root": "...", "filepath": "...", "content": "...", "hash": "..."}`; `root` is the absolute path of the indexed project, `filepath` is echoed as given, and `hash` is the SHA-256 of the whole file at read time.
+
+Pass that `hash` to the next `edit` of the same file. If anything changed in between, the edit is refused instead of overwriting code the agent has not seen.
 
 ### Edit
 
@@ -127,8 +129,11 @@ Line-based replacement is more robust than Python string replacement because it 
 
 Line numbers are exact boundaries, so read the range immediately before editing it. Any change that shifts lines in between makes the range stale.
 
+Pass the `hash` from that read as `--hash` to make the check explicit: if the file changed after the read, `edit` exits non-zero and leaves the file untouched instead of overwriting code the agent has not seen. Without `--hash` the edit proceeds as before.
+
 ```bash
-./.agents/skills/proxer/scripts/proxer edit -f "PLAN.md" -s 74 -e 86 <<'EOF'
+# The read above printed e.g. hash: "1f0c...". Pass it back:
+./.agents/skills/proxer/scripts/proxer edit -f "PLAN.md" -s 74 -e 86 --hash "1f0c..." <<'EOF'
   - [x] **1.2 Dialect-Specific DDL Migrations**
      - [x] Port `000001_init.up.sql` to PostgreSQL dialect
        - Native types (`TIMESTAMPTZ`, `BOOLEAN`, `TEXT`, `REAL`).
