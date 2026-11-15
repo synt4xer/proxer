@@ -12,8 +12,22 @@ Instead of relying on `grep` for code search or fragile Python scripts for code 
 
 - **FTS5 Smart Chunking:** Code is chunked into 60-line segments (with a 15-line sliding window) to preserve context retention and prevent wasting the agent's token limits.
 - **Autonomous Edit & Auto-Reindex:** When an agent edits a file, Proxer immediately saves the changes and silently updates the SQLite index. The agent's memory stays perfectly synchronized with the disk.
-- **Smart Defaults:** Out of the box, it ignores build/dependency folders (`node_modules`, `dist`, `.next`) and strictly indexes relevant files (`.go`, `.ts`, `.md`).
-- **Zero Dependencies:** Built with a CGO-free driver (`modernc.org/sqlite`). Highly portable and fast to compile.
+- **Prefix Search:** Every search term is matched as a token prefix, so `auth` reaches `AuthMiddleware` without the agent guessing full identifiers.
+- **Query Sanitization:** Free-form input, including punctuation and FTS5 operators, is quoted before it reaches the parser. Natural language never triggers a syntax error.
+- **Smart Defaults:** Out of the box, it skips dependency, build, and VCS directories (`.git`, `node_modules`, `dist`, `.next`, `.agents`, …) and indexes only known source and document extensions.
+- **Self-Contained:** A single CGO-free static binary built on `modernc.org/sqlite`. No runtime dependencies, no service to run.
+
+## Repository Layout
+
+```
+cmd/proxer/          CLI entry point (Cobra)
+internal/domain/     Result models
+internal/config/     Indexing limits and allowlists
+internal/filesystem/ Indexability predicates
+internal/indexer/    SQLite FTS5 store and chunking
+internal/tools/      Search, read, and edit operations
+skills/proxer/       Agent Skill package (installed into the target project)
+```
 
 ## Compilation and Installation
 
@@ -28,50 +42,71 @@ make build
 
 ### 2. Install to a Target Project
 
-Point the DEST variable to the root directory of the project where your LLM will be working.
+Point the `DEST` variable to the root directory of the project where your LLM will be working.
 
 ```bash
 make install DEST=/path/to/my-awesome-project
 ```
 
-This will create the directory and place the binary at: `/path/to/my-awesome-project/.agents/skills/proxer`.
+The skill is installed as a single unit:
 
-## Agent Usage & Harness Integration
-
-**Proxer** interacts with your AI Harness via stdout (for successful JSON responses) and stderr (for error messages requiring agent intervention). All commands below assume the agent is executing them from the root of the target project.
-
-### 1. Initialize
-
-The agent (or you) runs this once to build the `.proxer.db` in the project root.
-
-```bash
-./.agents/skills/proxer index
+```
+/path/to/my-awesome-project/.agents/skills/proxer/
+├── SKILL.md
+└── scripts/proxer
 ```
 
-### 2. Search
+Add the index to the target project's `.gitignore`:
 
-Used by the agent to find functions, lines, or error messages.
-
-```bash
-./.agents/skills/proxer search -k "authMiddleware"
+```gitignore
+.proxer.db
+.proxer.db-shm
+.proxer.db-wal
 ```
 
-Output: JSON array containing `filepath`, `line ranges`, and `highlighted snippets`.
+## Command Reference
 
-### 3. Read
+All commands must run from the root of the target project. Results are printed as JSON on stdout; failures go to stderr with a non-zero exit code.
 
-Used by the agent to read full line ranges without hallucinating.
+| Command | Purpose |
+| --- | --- |
+| `index` | Rebuild `.proxer.db` from the project tree. |
+| `search -k <keyword>` | Return up to 5 matching chunks with `filepath`, `line`, and `snippet`. |
+| `read -f <file> -s <start> -e <end>` | Return the inclusive line range as JSON. |
+| `edit -f <file> -s <start> -e <end>` | Replace the range with stdin content, then re-index. |
+
+### Initialize
 
 ```bash
-./.agents/skills/proxer read -f "internal/auth.go" -s 40 -e 70
+./.agents/skills/proxer/scripts/proxer index
 ```
 
-### 4. Edit
+The index is a snapshot. Re-run `index` after `git checkout`, `git pull`, or any change made outside of `proxer edit`.
 
-Used by the agent to perform precise line replacements. This method is far more robust than Python string replacement because it is unaffected by indentation parsing errors. **Proxer automatically triggers an FTS5 re-index after this command completes.**
+### Search
 
 ```bash
-./.agents/skills/proxer edit -f "PLAN.md" -s 74 -e 86 << 'EOF'
+./.agents/skills/proxer/scripts/proxer search -k "authMiddleware"
+```
+
+```
+[{"filepath":"internal/auth.go","line":"40-99","snippet":"...<b>AuthMiddleware</b>..."}]
+```
+
+`line` is the chunk boundary, not the exact hit. Use the snippet to locate the match inside the chunk.
+
+### Read
+
+```bash
+./.agents/skills/proxer/scripts/proxer read -f "internal/auth.go" -s 40 -e 70
+```
+
+### Edit
+
+Line-based replacement is far more robust than Python string replacement because it is unaffected by indentation parsing errors. **Proxer automatically triggers an FTS5 re-index after this command completes.**
+
+```bash
+./.agents/skills/proxer/scripts/proxer edit -f "PLAN.md" -s 74 -e 86 <<'EOF'
   - [x] **1.2 Dialect-Specific DDL Migrations**
      - [x] Port `000001_init.up.sql` to PostgreSQL dialect
        - Native types (`TIMESTAMPTZ`, `BOOLEAN`, `TEXT`, `REAL`).
