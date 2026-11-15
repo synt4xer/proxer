@@ -75,3 +75,21 @@ func TestResolveRootReturnsAbsolutePaths(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, filepath.IsAbs(resolved), "relative input must come back absolute, got %q", resolved)
 }
+
+func TestResolveRootExpandsHome(t *testing.T) {
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+
+	t.Setenv(config.RootEnvVar, "")
+
+	// MCP configuration passes arguments literally, so "~" has to be expanded
+	// here rather than by a shell that is not involved.
+	resolved, err := config.ResolveRoot("~")
+	require.NoError(t, err)
+
+	expected, err := filepath.EvalSymlinks(home)
+	require.NoError(t, err)
+	actual, err := filepath.EvalSymlinks(resolved)
+	require.NoError(t, err)
+	assert.Equal(t, expected, actual)
+}

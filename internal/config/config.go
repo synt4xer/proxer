@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 const (
@@ -31,6 +32,7 @@ func ResolveRoot(explicit string) (string, error) {
 	if candidate == "" {
 		candidate = "."
 	}
+	candidate = expandHome(candidate)
 
 	abs, err := filepath.Abs(candidate)
 	if err != nil {
@@ -46,6 +48,24 @@ func ResolveRoot(explicit string) (string, error) {
 	}
 
 	return abs, nil
+}
+
+// expandHome resolves a leading tilde so a shell is not required. MCP server
+// configuration passes arguments literally, so "~/code/app" would otherwise
+// name a directory that does not exist.
+func expandHome(path string) string {
+	if path != "~" && !strings.HasPrefix(path, "~/") && !strings.HasPrefix(path, `~\`) {
+		return path
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return path
+	}
+	if path == "~" {
+		return home
+	}
+	return filepath.Join(home, path[2:])
 }
 
 var IgnoredDirs = []string{
