@@ -2,8 +2,10 @@ package tools_test
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/synt4xer/proxer/internal/config"
@@ -11,17 +13,7 @@ import (
 	"github.com/synt4xer/proxer/internal/tools"
 )
 
-func setupTestEnvironment(t *testing.T) (string, string) {
-	// Create a safe, isolated temporary directory
-	tempDir := t.TempDir()
-	originalWD, err := os.Getwd()
-	require.NoError(t, err)
-
-	err = os.Chdir(tempDir)
-	require.NoError(t, err)
-
-	// Write a mock code file
-	mockCode := `package main
+const mockCode = `package main
 import "fmt"
 
 func ProcessData() {
@@ -30,87 +22,103 @@ func ProcessData() {
 	return
 }
 `
-	err = os.WriteFile("main.go", []byte(mockCode), 0644)
-	require.NoError(t, err)
 
-	return tempDir, originalWD
+// newToolWorkspace builds an isolated indexed project. Nothing chdirs: every
+// tool call receives the root explicitly, which is how a harness invokes it.
+func newToolWorkspace(t *testing.T) (string, *sqlx.DB) {
+	t.Helper()
+
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "main.go"), []byte(mockCode), 0o644))
+
+	db, err := indexer.InitDB(filepath.Join(root, config.DBFile))
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+
+	require.NoError(t, indexer.IndexProject(db, root))
+	return root, db
 }
 
 func TestToolsSuite(t *testing.T) {
-	_, originalWD := setupTestEnvironment(t)
-	// Ensure we go back to the original directory when tests finish
-	defer os.Chdir(originalWD)
+	root, db := newToolWorkspace(t)
 
-	// 1. Setup DB and Index the mock workspace
-	db, err := indexer.InitDB(config.DBFile)
-	require.NoError(t, err)
-	defer db.Close()
-
-	err = indexer.IndexProject(db, ".")
-	require.NoError(t, err)
-
-	// --- 2. Test PerformSearch ---
 	t.Run("PerformSearch", func(t *testing.T) {
 		resultJSON, err := tools.PerformSearch(db, "ProcessData")
 		require.NoError(t, err)
-
-		// Assert output is a valid JSON and contains our target
 		assert.Contains(t, resultJSON, "main.go")
 		assert.Contains(t, resultJSON, "ProcessData")
 
-		// Test missing keyword (should return empty array JSON)
 		emptyJSON, err := tools.PerformSearch(db, "NonExistentKeyword")
 		require.NoError(t, err)
 		assert.Equal(t, "[]", emptyJSON)
 	})
 
 	t.Run("PerformSearchSanitizesInput", func(t *testing.T) {
-		// Raw FTS5 syntax must never reach the parser as an error
+		// Raw FTS5 syntax must never reach the parser as an error.
 		for _, keyword := range []string{"ProcessData(", "AND", "*", `"quoted`, "middleware?"} {
 			_, err := tools.PerformSearch(db, keyword)
 			require.NoError(t, err, "keyword %q produced an error", keyword)
 		}
 
-		// Punctuation-only input degrades to an empty result set
 		resultJSON, err := tools.PerformSearch(db, "()*&^%")
 		require.NoError(t, err)
 		assert.Equal(t, "[]", resultJSON)
 	})
 
-	// --- 3. Test PerformRead ---
 	t.Run("PerformRead", func(t *testing.T) {
-		resultJSON, err := tools.PerformRead("main.go", 4, 5)
+		resultJSON, err := tools.PerformRead(root, "main.go", 4, 5)
 		require.NoError(t, err)
-
-		// Lines 4-5 should contain "func ProcessData() {" and the print statement
 		assert.Contains(t, resultJSON, "func ProcessData()")
 		assert.Contains(t, resultJSON, "fmt.Println")
 
-		// Test out of bounds or missing file
-		_, err = tools.PerformRead("missing.go", 1, 5)
+		_, err = tools.PerformRead(root, "missing.go", 1, 5)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "not found")
 	})
 
-	// --- 4. Test PerformEdit ---
+	t.Run("PerformReadResolvesAgainstRootNotWorkingDirectory", func(t *testing.T) {
+		// A harness may spawn proxer from an unrelated directory.
+		t.Chdir(t.TempDir())
+
+		resultJSON, err := tools.PerformRead(root, "main.go", 4, 4)
+		require.NoError(t, err, "relative paths must resolve against the project root")
+		assert.Contains(t, resultJSON, "func ProcessData()")
+		assert.Contains(t, resultJSON, `"filepath":"main.go"`, "the path must be echoed as given")
+	})
+
+	t.Run("PerformReadAcceptsAbsolutePaths", func(t *testing.T) {
+		absolute := filepath.Join(root, "main.go")
+		resultJSON, err := tools.PerformRead(root, absolute, 1, 1)
+		require.NoError(t, err)
+		assert.Contains(t, resultJSON, "package main")
+	})
+
 	t.Run("PerformEdit", func(t *testing.T) {
 		newContent := "\tfmt.Println(\"Data Processed Successfully\")\n\treturn true"
 
-		// Edit lines 5 to 7
-		resultJSON, err := tools.PerformEdit(db, "main.go", 5, 7, newContent)
+		resultJSON, err := tools.PerformEdit(db, root, "main.go", 5, 7, newContent)
 		require.NoError(t, err)
 		assert.Contains(t, resultJSON, "success")
 
-		// Verify disk file actually changed
-		updatedBytes, err := os.ReadFile("main.go")
+		updatedBytes, err := os.ReadFile(filepath.Join(root, "main.go"))
 		require.NoError(t, err)
 		updatedContent := string(updatedBytes)
 		assert.Contains(t, updatedContent, "Data Processed Successfully")
 		assert.NotContains(t, updatedContent, "We need to change this logic later")
 
-		// Verify FTS5 Auto-Reindex worked by searching the new word
 		searchResult, err := tools.PerformSearch(db, "Successfully")
 		require.NoError(t, err)
-		assert.Contains(t, searchResult, "main.go", "Auto-reindex failed to register new content")
+		assert.Contains(t, searchResult, "main.go", "auto-reindex failed to register new content")
+
+		// The stale line must be gone from the index too, not only from disk.
+		staleResult, err := tools.PerformSearch(db, "Processing")
+		require.NoError(t, err)
+		assert.NotContains(t, staleResult, "We need to change this logic later")
+	})
+
+	t.Run("PerformEditRejectsOutOfRange", func(t *testing.T) {
+		_, err := tools.PerformEdit(db, root, "main.go", 900, 901, "x")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid line range")
 	})
 }
