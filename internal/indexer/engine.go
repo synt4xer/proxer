@@ -39,7 +39,10 @@ func InitDB(dbPath string) (*sqlx.DB, error) {
 		"PRAGMA synchronous = NORMAL;",
 	}
 	for _, p := range pragmas {
-		db.MustExec(p)
+		if _, err := db.Exec(p); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("failed to apply %q: %w", p, err)
+		}
 	}
 
 	query := `
@@ -51,7 +54,11 @@ func InitDB(dbPath string) (*sqlx.DB, error) {
 			content
 		);
 	`
-	db.MustExec(query)
+	if _, err := db.Exec(query); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to create the index table: %w", err)
+	}
+
 	return db, nil
 }
 
