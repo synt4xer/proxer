@@ -112,3 +112,18 @@ Line-based replacement is far more robust than Python string replacement because
        - Native types (`TIMESTAMPTZ`, `BOOLEAN`, `TEXT`, `REAL`).
 EOF
 ```
+## Harness Integration
+
+### Agent Skills
+
+`skills/proxer/SKILL.md` follows the [Agent Skills specification](https://agentskills.io/specification), so any harness that discovers `.agents/skills/<name>/SKILL.md` picks Proxer up with no further configuration. Pi, Claude Code, and other Agent Skills implementations read the same layout.
+
+`make install` already places the package in the right location, so integration is just:
+
+1. Install into the target project (`make install DEST=...`).
+2. Confirm the harness lists `proxer` among its available skills after restart, and that `/skill:proxer` or an equivalent command loads it.
+3. Ask the agent to use it, for example: _"Use proxer to find where `AuthMiddleware` is defined, read that range, and rename it to `RequireSession`."_
+
+The skill body teaches the agent the order of operations: `index` first, then `search` → `read` → `edit`. Keep `SKILL.md` in sync with the CLI flags whenever they change.
+
+Proxer exposes no protocol server: the harness invokes the binary directly. MCP server mode is not implemented yet.
