@@ -36,6 +36,7 @@ func TestIsIndexableDir(t *testing.T) {
 		{name: "Block git directory", path: ".git", dirName: ".git", expected: false},
 		{name: "Block node_modules", path: "node_modules", dirName: "node_modules", expected: false},
 		{name: "Block Next.js build folder", path: ".next", dirName: ".next", expected: false},
+		{name: "Block installed skill package", path: ".agents", dirName: ".agents", expected: false},
 	}
 
 	for _, tt := range tests {

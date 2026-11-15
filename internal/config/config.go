@@ -9,6 +9,7 @@ const (
 
 var IgnoredDirs = []string{
 	".git", ".vscode", ".idea", ".github",
+	".agents",
 	"node_modules", "vendor",
 	"dist", "build", "out", "target",
 	"bin", "obj", "tmp", "coverage",
