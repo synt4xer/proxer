@@ -49,7 +49,7 @@ Use the shell binary when no MCP server is connected, when you need `--root` for
 ./.agents/skills/proxer/scripts/proxer index
 ```
 
-Rebuilds `.proxer.db` from the project tree. It skips `node_modules`, `dist`, `.next`, `.agents`, and other dependency or build directories. Indexed files are known source and document extensions (`.go`, `.ts`, `.py`, `.rs`, `.md`, `.json`, `.yaml`, `.sql`, `.sh`, and similar), plus exact names such as `Dockerfile`, `Makefile`, and `go.mod`, up to 1 MB each.
+Rebuilds `.proxer.db` from the project tree. It skips `node_modules`, `dist`, `.next`, `.agents`, and other dependency or build directories. A project can add to that list with a `.proxer.json` at its root, e.g. `{"ignored_dirs": ["third_party", "generated"]}`: names match whole directory names at any depth and add to the defaults, and a malformed file aborts the command. Indexed files are known source and document extensions (`.go`, `.ts`, `.py`, `.rs`, `.md`, `.json`, `.yaml`, `.sql`, `.sh`, and similar), plus exact names such as `Dockerfile`, `Makefile`, and `go.mod`, up to 1 MB each.
 
 The index is a snapshot. Re-run `index` after `git checkout`, `git pull`, or any change made outside of `proxer edit`.
 
@@ -103,6 +103,7 @@ The replacement does not need to match the length of the range. The whole range 
 
 - Every path must stay inside the root. `read` and `edit` reject `../` and absolute paths that point at another project, because no index entry exists outside the root. Use the harness `read` or `bash` for those files.
 - Files outside the indexed extensions are not searchable. Editing one works, but the change will not appear in `search`.
+- Directories on the project skip list (`.proxer.json`) are not indexed, and `edit` on a file inside one will not re-add it to the index.
 - `.proxer.db` belongs in the target project's `.gitignore`.
 - Creating and deleting files is out of scope: `edit` only rewrites an existing line range.
 - Concurrent writers queue instead of failing, but two processes editing the same file still leave only the last write. `edit` never leaves a half-written file; it does not merge concurrent changes. Pass the `hash` from `read` to catch a writer that changed the file and refuse the edit.
