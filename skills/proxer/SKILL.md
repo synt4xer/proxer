@@ -90,4 +90,5 @@ The replacement does not need to match the length of the range. The whole range 
 - Files outside the indexed extensions are not searchable. Editing one works, but the change will not appear in `search`.
 - `.proxer.db` belongs in the target project's `.gitignore`.
 - Creating and deleting files is out of scope: `edit` only rewrites an existing line range.
+- Concurrent writers queue instead of failing, but two processes editing the same file still leave only the last write. `edit` never leaves a half-written file; it does not merge concurrent changes.
 - `search` never uses regular expressions or file globs. Use `read` on a known path when you need exact text.
