@@ -1,6 +1,6 @@
 ---
 name: proxer
-description: Search, read, and edit a local codebase through a SQLite FTS5 index at the project root. Use when locating code by keyword instead of grepping, reading an exact line range instead of a whole file, or replacing a block of lines without rewriting the file.
+description: Search, read, and edit a local codebase through a SQLite FTS5 index at the project root. Use when locating code by keyword instead of grepping, reading an exact line range instead of a whole file, or replacing a block of lines without rewriting the file. Available as a CLI and as an MCP stdio server whose tools are named index, search, read, and edit.
 ---
 
 # Proxer
@@ -22,6 +22,19 @@ Every command takes a global `--root <path>` flag. The index belongs to that roo
 `--root` beats `PROXER_ROOT`, which beats the working directory. Relative `-f` paths resolve against the root, so `-f internal/auth.go` means the same file regardless of where the process started.
 
 Each command prints JSON on stdout. Failures print to stderr and exit non-zero, so check the exit code before parsing the output.
+
+## Two ways to drive it
+
+If the harness has a `proxer` MCP server connected, prefer its tools over the shell binary. They return the same JSON without shell quoting, and `edit` takes the replacement as an argument instead of stdin. The tools are named `mcp__proxer__<tool>`:
+
+- `mcp__proxer__index` — no arguments.
+- `mcp__proxer__search` — `{"keyword": "..."}`.
+- `mcp__proxer__read` — `{"filepath": "...", "start": 40, "end": 70}`; `start` defaults to 1 and `end` to 60.
+- `mcp__proxer__edit` — `{"filepath": "...", "start": 52, "end": 58, "content": "..."}`.
+
+The MCP server fixes the root when it starts, so its tools take no `--root` and every `filepath` is relative to that root. Everything below applies to both interfaces: the same matching, the same path containment, and the same auto-reindex after `edit`.
+
+Use the shell binary when no MCP server is connected, when you need `--root` for another project, or when the harness only exposes the skill.
 
 ## Workflow
 
