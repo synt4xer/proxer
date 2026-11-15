@@ -13,9 +13,12 @@ import (
 	"github.com/synt4xer/proxer/internal/tools"
 )
 
+const manageDBAnnotation = "ownDB"
+
+var root string
+
 func main() {
 	var db *sqlx.DB
-	var root string
 
 	var rootCmd = &cobra.Command{
 		Use:   "proxer",
@@ -31,6 +34,10 @@ func main() {
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Failed to resolve the project root: %v\n", err)
 				os.Exit(1)
+			}
+
+			if cmd.Annotations[manageDBAnnotation] == "true" {
+				return
 			}
 
 			db, err = indexer.InitDB(filepath.Join(root, config.DBFile))
@@ -133,7 +140,7 @@ func main() {
 	editCmd.Flags().IntVarP(&editEnd, "end", "e", 1, "End line to replace")
 	editCmd.MarkFlagRequired("filepath")
 
-	rootCmd.AddCommand(indexCmd, searchCmd, readCmd, editCmd)
+	rootCmd.AddCommand(indexCmd, searchCmd, readCmd, editCmd, newMCPCommand())
 
 	rootCmd.SilenceUsage = true
 	rootCmd.SilenceErrors = true
