@@ -86,6 +86,7 @@ The replacement does not need to match the length of the range. The whole range 
 
 ## Limits
 
+- Every path must stay inside the root. `read` and `edit` reject `../` and absolute paths that point at another project, because no index entry exists outside the root. Use the harness `read` or `bash` for those files.
 - Files outside the indexed extensions are not searchable. Editing one works, but the change will not appear in `search`.
 - `.proxer.db` belongs in the target project's `.gitignore`.
 - Creating and deleting files is out of scope: `edit` only rewrites an existing line range.
