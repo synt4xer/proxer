@@ -2,6 +2,7 @@ package indexer_test
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -10,66 +11,91 @@ import (
 	"github.com/synt4xer/proxer/internal/indexer"
 )
 
-func TestIndexerEngine(t *testing.T) {
-	// 1. Setup Temporary Workspace
-	// This ensures our tests do not pollute the actual project directory
-	tempDir := t.TempDir()
+// newWorkspace builds an isolated project on disk and returns its root. Tests
+// no longer chdir into it: the index is addressed by root, not by process
+// working directory.
+func newWorkspace(t *testing.T) string {
+	t.Helper()
 
-	// Change working directory to tempDir so config.DBFile is created there
-	originalWD, err := os.Getwd()
-	require.NoError(t, err)
-	defer os.Chdir(originalWD)
+	root := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(root, "internal"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, "internal", "hello.go"),
+		[]byte("package main\nimport \"fmt\"\nfunc hello() {\n\tfmt.Println(\"Hello Agent!\")\n}\n"),
+		0o644,
+	))
+	// A binary extension must be skipped by the scanner.
+	require.NoError(t, os.WriteFile(filepath.Join(root, "ignore_me.png"), []byte("fake png"), 0o644))
 
-	err = os.Chdir(tempDir)
-	require.NoError(t, err)
-
-	// 2. Create mock files to index
-	err = os.Mkdir("internal", 0755)
-	require.NoError(t, err)
-
-	mockGoCode := `package main
-import "fmt"
-func hello() {
-	fmt.Println("Hello Agent!")
+	return root
 }
-`
-	err = os.WriteFile("internal/hello.go", []byte(mockGoCode), 0644)
-	require.NoError(t, err)
 
-	// Create an ignored file to ensure it gets skipped
-	err = os.WriteFile("ignore_me.png", []byte("fake png binary data"), 0644)
-	require.NoError(t, err)
+func TestIndexerEngine(t *testing.T) {
+	root := newWorkspace(t)
 
-	// 3. Test Database Initialization
-	db, err := indexer.InitDB(config.DBFile)
+	db, err := indexer.InitDB(filepath.Join(root, config.DBFile))
 	require.NoError(t, err, "InitDB should not produce an error")
 	defer db.Close()
 
-	// Verify table was created
 	var tableName string
-	err = db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='chunk_search'").Scan(&tableName)
-	assert.NoError(t, err)
+	require.NoError(t, db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='chunk_search'").Scan(&tableName))
 	assert.Equal(t, "chunk_search", tableName)
 
-	// 4. Test Project Indexing
-	err = indexer.IndexProject(db, ".")
-	require.NoError(t, err, "IndexProject should complete without errors")
+	require.NoError(t, indexer.IndexProject(db, root), "IndexProject should complete without errors")
 
-	// 5. Verify the data was indexed correctly
 	var count int
-	err = db.QueryRow("SELECT COUNT(*) FROM chunk_search").Scan(&count)
-	assert.NoError(t, err)
-
-	// We expect exactly 1 chunk because the .png is ignored and the .go file is small
+	require.NoError(t, db.QueryRow("SELECT COUNT(*) FROM chunk_search").Scan(&count))
 	assert.Equal(t, 1, count, "Only internal/hello.go should be indexed")
 
-	// Verify content matching
-	var filepath string
-	var startLine, endLine int
-	err = db.QueryRow("SELECT filepath, start_line, end_line FROM chunk_search WHERE content MATCH 'Agent'").Scan(&filepath, &startLine, &endLine)
+	var storedPath string
+	var start, end int
+	require.NoError(t, db.QueryRow("SELECT filepath, start_line, end_line FROM chunk_search WHERE content MATCH 'Agent'").Scan(&storedPath, &start, &end))
 
-	assert.NoError(t, err)
-	assert.Equal(t, "internal/hello.go", filepath)
-	assert.Equal(t, 1, startLine)
-	assert.True(t, endLine > 1)
+	assert.Equal(t, "internal/hello.go", storedPath, "chunks must be keyed by path inside the project")
+	assert.Equal(t, 1, start)
+	assert.True(t, end > 1)
+}
+
+func TestIndexProjectStoresIdenticalPathsForAbsoluteAndRelativeRoots(t *testing.T) {
+	root := newWorkspace(t)
+
+	// Index once through the absolute root, once through a path relative to
+	// the parent directory. Both must produce the same rows.
+	relRoot, err := filepath.Rel(filepath.Dir(root), root)
+	require.NoError(t, err)
+
+	var indexed []string
+	for _, candidate := range []string{root, filepath.Join(filepath.Dir(root), relRoot)} {
+		db, err := indexer.InitDB(filepath.Join(root, config.DBFile))
+		require.NoError(t, err)
+
+		require.NoError(t, indexer.IndexProject(db, candidate))
+
+		var rows []string
+		require.NoError(t, db.Select(&rows, "SELECT filepath FROM chunk_search ORDER BY filepath"))
+		indexed = append(indexed, rows...)
+
+		require.NoError(t, db.Close())
+	}
+
+	require.Len(t, indexed, 2)
+	assert.Equal(t, indexed[0], indexed[1], "root spelling must not leak into the index")
+}
+
+func TestIndexProjectHandlesIgnoredDirectoryAsRoot(t *testing.T) {
+	// "build" is an ignored directory name, but it is legitimate as a project
+	// root. Indexing must not silently produce an empty index.
+	root := filepath.Join(t.TempDir(), "build")
+	require.NoError(t, os.MkdirAll(root, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "main.go"), []byte("func Build() {}\n"), 0o644))
+
+	db, err := indexer.InitDB(filepath.Join(root, config.DBFile))
+	require.NoError(t, err)
+	defer db.Close()
+
+	require.NoError(t, indexer.IndexProject(db, root))
+
+	var count int
+	require.NoError(t, db.QueryRow("SELECT COUNT(*) FROM chunk_search").Scan(&count))
+	assert.Equal(t, 1, count)
 }
