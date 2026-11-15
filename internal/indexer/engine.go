@@ -3,6 +3,7 @@ package indexer
 import (
 	"fmt"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +20,29 @@ const insertChunkSQL = `
 	VALUES (?, ?, ?, ?, ?)
 `
 
+// dsn builds the SQLite URI for dbPath. Two settings cannot be expressed by a
+// plain filename: a busy timeout on every connection, and BEGIN IMMEDIATE for
+// write transactions.
+//
+// BEGIN IMMEDIATE matters because an FTS5 DELETE reads the index before it
+// writes the shadow tables. A deferred transaction therefore opens a read
+// snapshot first, and the later upgrade fails with SQLITE_BUSY_SNAPSHOT, which
+// the busy handler must not retry. Taking the write lock up front removes that
+// window, so concurrent writers queue instead of failing.
+func dsn(dbPath string) string {
+	// EscapedPath keeps the separators but escapes "?" and "#", which SQLite's
+	// URI parser would otherwise read as delimiters.
+	escaped := (&url.URL{Path: filepath.ToSlash(dbPath)}).EscapedPath()
+
+	params := url.Values{}
+	params.Set("_txlock", "immediate")
+	params.Add("_pragma", "busy_timeout(5000)")
+	params.Add("_pragma", "journal_mode(WAL)")
+	params.Add("_pragma", "synchronous(NORMAL)")
+
+	return "file:" + escaped + "?" + params.Encode()
+}
+
 // InitDB opens the index database at dbPath and creates the FTS5 table when it
 // is missing. The path is a parameter because the index belongs to a project
 // root, not to whatever directory the process happens to run in.
@@ -29,21 +53,15 @@ func InitDB(dbPath string) (*sqlx.DB, error) {
 		}
 	}
 
-	db, err := sqlx.Connect("sqlite", dbPath)
+	db, err := sqlx.Connect("sqlite", dsn(dbPath))
 	if err != nil {
 		return nil, err
 	}
 
-	pragmas := []string{
-		"PRAGMA journal_mode = WAL;",
-		"PRAGMA synchronous = NORMAL;",
-	}
-	for _, p := range pragmas {
-		if _, err := db.Exec(p); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("failed to apply %q: %w", p, err)
-		}
-	}
+	// One connection serializes this process' own writers, which is all a single
+	// index file can support, and keeps the connection-scoped pragmas in force
+	// for every statement.
+	db.SetMaxOpenConns(1)
 
 	query := `
 		CREATE VIRTUAL TABLE IF NOT EXISTS chunk_search USING fts5(
