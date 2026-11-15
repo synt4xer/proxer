@@ -222,5 +222,10 @@ func relativePath(rootPath, path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to relativize %s against %s: %w", path, rootPath, err)
 	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		// A "../" key describes a file the next walk of the root will never
+		// reach, so the row would survive every rebuild that follows.
+		return "", fmt.Errorf("%s is outside the project root %s", path, rootPath)
+	}
 	return filepath.ToSlash(rel), nil
 }

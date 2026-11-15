@@ -104,3 +104,20 @@ func TestReindexFileKeysChunksByProjectPath(t *testing.T) {
 	assert.Equal(t, 1, countChunks(t, db, "pkg/file.go"), "reindex must not duplicate rows")
 	assert.Contains(t, contentFor(t, db, "pkg/file.go"), "Second")
 }
+
+func TestReindexFileRejectsPathsOutsideTheRoot(t *testing.T) {
+	root := t.TempDir()
+	outside := filepath.Join(filepath.Dir(root), "sibling-project", "foreign.go")
+	require.NoError(t, os.MkdirAll(filepath.Dir(outside), 0o755))
+	require.NoError(t, os.WriteFile(outside, []byte("package foreign\n"), 0o644))
+
+	db := openWorkspaceDB(t, root)
+
+	// Storing the file under a "../" key would be worse than failing: no later
+	// walk of the root can ever reach that key to clean it up.
+	err := indexer.ReindexFile(db, root, outside)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "outside the project root")
+
+	assert.Zero(t, countChunks(t, db, "../sibling-project/foreign.go"))
+}
