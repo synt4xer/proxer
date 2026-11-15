@@ -21,9 +21,29 @@ type searchInput struct {
 	Keyword string `json:"keyword" jsonschema:"terms to search for; each term matches as a token prefix and multiple terms are OR-ed"`
 }
 
+type readInput struct {
+	Filepath string `json:"filepath" jsonschema:"path to the file, relative to the project root; absolute paths inside the root are accepted and paths outside it are rejected"`
+	Start    int    `json:"start,omitempty" jsonschema:"first line to read, inclusive (default 1)"`
+	End      int    `json:"end,omitempty" jsonschema:"last line to read, inclusive (default 60)"`
+}
+
+type editInput struct {
+	Filepath string `json:"filepath" jsonschema:"path to the file, relative to the project root; absolute paths inside the root are accepted and paths outside it are rejected"`
+	Start    int    `json:"start" jsonschema:"first line to replace, inclusive"`
+	End      int    `json:"end" jsonschema:"last line to replace, inclusive"`
+	Content  string `json:"content" jsonschema:"replacement text for the line range; it need not have the same number of lines as the range"`
+}
+
+type editOutput struct {
+	Status  string `json:"status" jsonschema:"human-readable result status"`
+	Message string `json:"message" jsonschema:"details of the edit"`
+}
+
 func (s *Server) registerTools() {
 	s.addIndexTool()
 	s.addSearchTool()
+	s.addReadTool()
+	s.addEditTool()
 }
 
 func (s *Server) addIndexTool() {
@@ -61,5 +81,53 @@ func (s *Server) addSearchTool() {
 			results = []domain.SearchResultJSON{}
 		}
 		return nil, results, nil
+	})
+}
+
+func (s *Server) addReadTool() {
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name: "read",
+		Description: "Read an inclusive line range from a file. The filepath is relative to the project root; " +
+			"absolute paths inside the root are accepted and paths outside it are rejected. " +
+			"Returns the filepath as given and the requested lines, each terminated by a newline.",
+	}, func(_ context.Context, _ *mcp.CallToolRequest, in readInput) (*mcp.CallToolResult, domain.ReadResultJSON, error) {
+		start, end := in.Start, in.End
+		if start <= 0 {
+			start = 1
+		}
+		if end <= 0 {
+			end = 60
+		}
+
+		resultJSON, err := tools.PerformRead(s.root, in.Filepath, start, end)
+		if err != nil {
+			return nil, domain.ReadResultJSON{}, err
+		}
+
+		var result domain.ReadResultJSON
+		if err := json.Unmarshal([]byte(resultJSON), &result); err != nil {
+			return nil, domain.ReadResultJSON{}, fmt.Errorf("decode read result: %w", err)
+		}
+		return nil, result, nil
+	})
+}
+
+func (s *Server) addEditTool() {
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name: "edit",
+		Description: "Replace an inclusive line range in a file and reindex the file. The filepath is relative to the project root; " +
+			"absolute paths inside the root are accepted and paths outside it are rejected. " +
+			"The replacement need not have the same number of lines as the range. The file is written atomically.",
+	}, func(_ context.Context, _ *mcp.CallToolRequest, in editInput) (*mcp.CallToolResult, editOutput, error) {
+		resultJSON, err := tools.PerformEdit(s.db, s.root, in.Filepath, in.Start, in.End, in.Content)
+		if err != nil {
+			return nil, editOutput{}, err
+		}
+
+		var result editOutput
+		if err := json.Unmarshal([]byte(resultJSON), &result); err != nil {
+			return nil, editOutput{}, fmt.Errorf("decode edit result: %w", err)
+		}
+		return nil, result, nil
 	})
 }
