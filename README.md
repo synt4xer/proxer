@@ -4,20 +4,22 @@
 
 ## Why Proxer
 
-`grep` and `ripgrep` scan the tree on every call. Proxer answers from an index instead, so search latency stays roughly flat as the project grows, and each hit arrives as a chunk the agent can pass straight to `read` and `edit`. The measured cost, on an Apple-silicon Mac with a warm cache over synthetic Go trees:
+An agent's context window is the scarce resource, and a raw scan spends it on every matching line. On the benchmark below, `rg` printed 10.8 MB over 156,001 lines for the token `func` on a 2,000-file tree, and 43.9 MB over 624,001 lines on an 8,000-file tree. The same query through Proxer returned 846 B and 831 B.
+
+Proxer returns at most five 60-line chunks, each with a 15-line overlap, so a hit arrives with enough surrounding code to act on and can be passed straight to `read` and `edit`. The index keeps search fast as the tree grows, but the bounded payload is the reason to use it in an agent loop.
 
 | Workload | 2,000 files (160k lines) | 8,000 files (640k lines) |
 | --- | --- | --- |
-| `index` (once per session) | 278 ms | 1.39 s |
-| `edit` (reindex the edited file) | 20 ms | 37 ms |
+| `search` payload for `func` | 846 B | 831 B |
+| `rg` payload for `func` | 10.8 MB / 156k lines | 43.9 MB / 624k lines |
 | `search` for a rare token | 7.9 ms | 9.4 ms |
 | `rg` for the same token | 22 ms | 70 ms |
-| `search` payload for a common word | 846 B | 831 B |
-| `rg` payload for the same word | 10.8 MB / 156k lines | 43.9 MB / 624k lines |
+| `index` (once per session) | 278 ms | 1.39 s |
+| `edit` (reindex the edited file) | 20 ms | 37 ms |
 
-Method: `index` fills the database once, `edit` reindexes only the file it changed, and `search` returns at most five 60-line chunks. `rg` is ripgrep 15.2.0 given an explicit path. The index cost is one-time and proportional to the tree; the edit cost tracks the edited file, not the project.
+Method: an Apple-silicon Mac with a warm cache over synthetic Go trees. `rg` is ripgrep 15.2.0 given an explicit path and default output. `index` fills the database once, `edit` reindexes only the file it changed, and `search` returns at most five 60-line chunks. The index cost is one-time and proportional to the tree; the edit cost tracks the edited file, not the project.
 
-The payload column is the reason to prefer Proxer over a raw scan in an agent loop: the same query that dumps 43.9 MB of grep output returns 831 bytes of `{root, filepath, line, snippet}`, and each entry can be fed to `read` and then `edit` with the `hash` guard.
+Each `search` entry is `{root, filepath, line, snippet}`. The agent feeds the line range to `read`, gets back a `hash`, and passes it to `edit` so a change in between refuses the overwrite.
 
 Proxer is text search, not semantic analysis. It does not resolve types, definitions, or references; that is what a language server (`gopls`, `tsserver`, `rust-analyzer`) is for. Use Proxer to locate and change text, and the language server to reason about the program. They complement each other.
 
@@ -193,6 +195,7 @@ Setup for both, including a worked project-scoped MCP config, lives in [docs/INT
 - **Scope.** Every path must stay inside the root. `read` and `edit` reject `../` and absolute paths that point at another project, because no index entry exists outside the root. Use the harness `read` or `bash` for those files.
 - **Snapshot index.** The index reflects the tree at the last `index` (`edit` refreshes the file it touches). Changes from `git checkout`, another tool, or another process are invisible until the next `index`.
 - **Text matching only.** Search matches token prefixes. CamelCase is not split, so `middleware` will not find `AuthMiddleware` while `auth` will. There are no regular expressions or globs.
+- **Capped result set.** `search` returns at most five chunks ordered by rank, so a broad query is truncated rather than complete. Treat a search as a starting point.
 - **Indexed extensions only.** Files outside the known source and document extensions are not searchable. Editing one works, but the change will not appear in `search`.
 - **Ignored directories.** Directories on the skip list are not indexed, and `edit` inside one will not re-add it to the index.
 - **File edits only.** Creating and deleting files is out of scope; `edit` rewrites an existing line range.
