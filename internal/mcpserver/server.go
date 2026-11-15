@@ -32,6 +32,7 @@ func New(db *sqlx.DB, root string) *Server {
 		&mcp.Implementation{Name: "proxer", Version: Version},
 		&mcp.ServerOptions{Instructions: instructions},
 	)
+	s.registerTools()
 	return s
 }
 
