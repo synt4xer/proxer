@@ -16,6 +16,7 @@ import (
 const manageDBAnnotation = "ownDB"
 
 var root string
+var ignoredDirs []string
 
 func main() {
 	var db *sqlx.DB
@@ -33,6 +34,12 @@ func main() {
 			root, err = config.ResolveRoot(rootFlag)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Failed to resolve the project root: %v\n", err)
+				os.Exit(1)
+			}
+
+			ignoredDirs, err = config.LoadIgnoredDirs(root)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to load the project config: %v\n", err)
 				os.Exit(1)
 			}
 
@@ -58,7 +65,7 @@ func main() {
 		Use:   "index",
 		Short: "Scan and index the local directory",
 		Run: func(cmd *cobra.Command, args []string) {
-			if err := indexer.IndexProject(db, root, config.DefaultIgnoredDirs); err != nil {
+			if err := indexer.IndexProject(db, root, ignoredDirs); err != nil {
 				fmt.Fprintf(os.Stderr, "Indexing failed: %v\n", err)
 				os.Exit(1)
 			}
@@ -128,7 +135,7 @@ func main() {
 				os.Exit(1)
 			}
 
-			resultJSON, err := tools.PerformEdit(db, root, editFilepath, editStart, editEnd, string(newContentBytes), editHash, config.DefaultIgnoredDirs)
+			resultJSON, err := tools.PerformEdit(db, root, editFilepath, editStart, editEnd, string(newContentBytes), editHash, ignoredDirs)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, err.Error())
 				os.Exit(1)
