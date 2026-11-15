@@ -32,7 +32,7 @@ func buildMatchQuery(keyword string) (string, bool) {
 	return strings.Join(quoted, " OR "), true
 }
 
-func PerformSearch(db *sqlx.DB, keyword string) (string, error) {
+func PerformSearch(db *sqlx.DB, root, keyword string) (string, error) {
 	matchQuery, ok := buildMatchQuery(keyword)
 	if !ok {
 		return "[]", nil
@@ -58,6 +58,7 @@ func PerformSearch(db *sqlx.DB, keyword string) (string, error) {
 	var jsonResults []domain.SearchResultJSON
 	for _, r := range dbResults {
 		jsonResults = append(jsonResults, domain.SearchResultJSON{
+			Root:     root,
 			Filepath: r.Filepath,
 			Line:     fmt.Sprintf("%d-%d", r.StartLine, r.EndLine),
 			Snippet:  r.Snippet,

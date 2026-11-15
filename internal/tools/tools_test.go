@@ -1,6 +1,7 @@
 package tools_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/synt4xer/proxer/internal/config"
+	"github.com/synt4xer/proxer/internal/domain"
 	"github.com/synt4xer/proxer/internal/indexer"
 	"github.com/synt4xer/proxer/internal/tools"
 )
@@ -44,12 +46,17 @@ func TestToolsSuite(t *testing.T) {
 	root, db := newToolWorkspace(t)
 
 	t.Run("PerformSearch", func(t *testing.T) {
-		resultJSON, err := tools.PerformSearch(db, "ProcessData")
+		resultJSON, err := tools.PerformSearch(db, root, "ProcessData")
 		require.NoError(t, err)
 		assert.Contains(t, resultJSON, "main.go")
 		assert.Contains(t, resultJSON, "ProcessData")
 
-		emptyJSON, err := tools.PerformSearch(db, "NonExistentKeyword")
+		var results []domain.SearchResultJSON
+		require.NoError(t, json.Unmarshal([]byte(resultJSON), &results))
+		require.NotEmpty(t, results)
+		assert.Equal(t, root, results[0].Root, "each match must name the index it came from")
+
+		emptyJSON, err := tools.PerformSearch(db, root, "NonExistentKeyword")
 		require.NoError(t, err)
 		assert.Equal(t, "[]", emptyJSON)
 	})
@@ -57,11 +64,11 @@ func TestToolsSuite(t *testing.T) {
 	t.Run("PerformSearchSanitizesInput", func(t *testing.T) {
 		// Raw FTS5 syntax must never reach the parser as an error.
 		for _, keyword := range []string{"ProcessData(", "AND", "*", `"quoted`, "middleware?"} {
-			_, err := tools.PerformSearch(db, keyword)
+			_, err := tools.PerformSearch(db, root, keyword)
 			require.NoError(t, err, "keyword %q produced an error", keyword)
 		}
 
-		resultJSON, err := tools.PerformSearch(db, "()*&^%")
+		resultJSON, err := tools.PerformSearch(db, root, "()*&^%")
 		require.NoError(t, err)
 		assert.Equal(t, "[]", resultJSON)
 	})
@@ -71,6 +78,10 @@ func TestToolsSuite(t *testing.T) {
 		require.NoError(t, err)
 		assert.Contains(t, resultJSON, "func ProcessData()")
 		assert.Contains(t, resultJSON, "fmt.Println")
+
+		var result domain.ReadResultJSON
+		require.NoError(t, json.Unmarshal([]byte(resultJSON), &result))
+		assert.Equal(t, root, result.Root, "a read result must name the index it came from")
 
 		_, err = tools.PerformRead(root, "missing.go", 1, 5)
 		assert.Error(t, err)
@@ -166,12 +177,12 @@ func TestToolsSuite(t *testing.T) {
 		assert.Contains(t, updatedContent, "Data Processed Successfully")
 		assert.NotContains(t, updatedContent, "We need to change this logic later")
 
-		searchResult, err := tools.PerformSearch(db, "Successfully")
+		searchResult, err := tools.PerformSearch(db, root, "Successfully")
 		require.NoError(t, err)
 		assert.Contains(t, searchResult, "main.go", "auto-reindex failed to register new content")
 
 		// The stale line must be gone from the index too, not only from disk.
-		staleResult, err := tools.PerformSearch(db, "Processing")
+		staleResult, err := tools.PerformSearch(db, root, "Processing")
 		require.NoError(t, err)
 		assert.NotContains(t, staleResult, "We need to change this logic later")
 	})

@@ -90,12 +90,14 @@ func TestServerWorkflow(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, searchRes)), &found))
 	require.Len(t, found, 1)
 	assert.Equal(t, "main.go", found[0].Filepath)
+	assert.Equal(t, root, found[0].Root)
 
 	readRes := callTool(t, cs, "read", map[string]any{"filepath": "main.go"})
 	require.False(t, readRes.IsError)
 	var read domain.ReadResultJSON
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, readRes)), &read))
 	assert.Contains(t, read.Content, "ProcessData")
+	assert.Equal(t, root, read.Root)
 
 	editRes := callTool(t, cs, "edit", map[string]any{
 		"filepath": "main.go",

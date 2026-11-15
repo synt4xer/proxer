@@ -65,10 +65,10 @@ func (s *Server) addSearchTool() {
 		Name: "search",
 		Description: "Search the full-text index. Every term matches as a token prefix and multiple terms are OR-ed. " +
 			"camelCase is not split, so 'auth' reaches 'AuthMiddleware' but 'middleware' does not. " +
-			"Returns up to 5 matches, each with a filepath relative to the project root, a line range, and a snippet " +
-			"where matches are wrapped in <b> tags. Empty or punctuation-only input returns no matches.",
+			"Returns up to 5 matches, each with the absolute project root, a filepath relative to that root, a line range, " +
+			"and a snippet where matches are wrapped in <b> tags. Empty or punctuation-only input returns no matches.",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in searchInput) (*mcp.CallToolResult, []domain.SearchResultJSON, error) {
-		resultJSON, err := tools.PerformSearch(s.db, in.Keyword)
+		resultJSON, err := tools.PerformSearch(s.db, s.root, in.Keyword)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -89,7 +89,7 @@ func (s *Server) addReadTool() {
 		Name: "read",
 		Description: "Read an inclusive line range from a file. The filepath is relative to the project root; " +
 			"absolute paths inside the root are accepted and paths outside it are rejected. " +
-			"Returns the filepath as given and the requested lines, each terminated by a newline.",
+			"Returns the absolute project root, the filepath as given, and the requested lines, each terminated by a newline.",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in readInput) (*mcp.CallToolResult, domain.ReadResultJSON, error) {
 		start, end := in.Start, in.End
 		if start <= 0 {
