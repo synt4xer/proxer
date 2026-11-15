@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/jmoiron/sqlx"
@@ -47,8 +48,7 @@ func PerformEdit(db *sqlx.DB, root, path string, startLine, endLine int, newCont
 
 	finalContent := strings.Join(finalLines, "\n")
 
-	err = os.WriteFile(resolved, []byte(finalContent), 0o644)
-	if err != nil {
+	if err := writeFileAtomically(resolved, []byte(finalContent)); err != nil {
 		return "", fmt.Errorf("failed to save file: %w", err)
 	}
 
@@ -66,4 +66,50 @@ func PerformEdit(db *sqlx.DB, root, path string, startLine, endLine int, newCont
 		return "", fmt.Errorf("failed to marshal JSON: %w", err)
 	}
 	return string(out), nil
+}
+
+// writeFileAtomically replaces path through a temporary file in the same
+// directory. A plain write truncates first, so a second process that reads while
+// the write is in flight sees a partial file and can splice garbage into it.
+// The rename makes the new content appear in one step.
+//
+// Two processes editing the same file still race on the content they read: the
+// last writer wins. Serializing that would need a lock, which is out of scope
+// here; preventing the corruption is not.
+func writeFileAtomically(path string, content []byte) error {
+	// A symlink is edited through its target, so the link itself must survive
+	// the replacement.
+	target, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return err
+	}
+
+	info, err := os.Stat(target)
+	if err != nil {
+		return err
+	}
+
+	tmp, err := os.CreateTemp(filepath.Dir(target), ".proxer-edit-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+
+	if _, err := tmp.Write(content); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpName, info.Mode().Perm()); err != nil {
+		return err
+	}
+
+	return os.Rename(tmpName, target)
 }
