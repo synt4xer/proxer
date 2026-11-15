@@ -23,7 +23,7 @@ The database lives at `<root>/.proxer.db`, and every path in it is keyed relativ
 - **Explicit Project Root:** `--root`, `PROXER_ROOT`, or the working directory, in that order. The index never depends on where the process happened to start.
 - **Prefix Search:** Every search term is matched as a token prefix, so `auth` reaches `AuthMiddleware` without the agent guessing full identifiers.
 - **Query Sanitization:** Free-form input, including punctuation and FTS5 operators, is quoted before it reaches the parser. Natural language never triggers a syntax error.
-- **Smart Defaults:** Out of the box, it skips dependency, build, and VCS directories (`.git`, `node_modules`, `dist`, `.next`, `.agents`, …) and indexes known source and document extensions plus exact names such as `Dockerfile`, `Makefile`, and `go.mod`, up to 1 MB per file. The lists live in `internal/config/config.go`.
+- **Smart Defaults:** Out of the box, it skips dependency, build, and VCS directories (`.git`, `node_modules`, `dist`, `.next`, `.agents`, …) and indexes known source and document extensions plus exact names such as `Dockerfile`, `Makefile`, and `go.mod`, up to 1 MB per file. A project extends the skip list with a `.proxer.json` at its root, and the defaults always stay in force. The built-in lists live in `internal/config/config.go`.
 - **Self-Contained:** A single CGO-free static binary built on `modernc.org/sqlite`. No runtime dependencies, no service to run.
 
 ## Repository Layout
@@ -86,6 +86,18 @@ Results are printed as JSON on stdout; failures go to stderr with a non-zero exi
 | `read -f <file> -s <start> -e <end>` | Return `root`, `filepath`, the inclusive line range, and the file `hash` as JSON. |
 | `edit -f <file> -s <start> -e <end> [--hash <hash>]` | Replace the range with stdin content, then reindex that file. |
 | `mcp` | Serve all four operations as MCP tools over stdio. |
+
+### Project Configuration
+
+Drop a `.proxer.json` in the project root to add directories to the skip list:
+
+```json
+{
+  "ignored_dirs": ["third_party", "generated", "mocks"]
+}
+```
+
+Names match whole directory names at any depth and are added to the built-in defaults, which stay in force. A malformed file aborts the command with a non-zero exit code instead of silently indexing directories the project excluded. Changing the list takes effect on the next `index`; `edit` will not re-add a file under an ignored directory to the index.
 
 ### Initialize
 
