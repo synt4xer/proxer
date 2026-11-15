@@ -86,11 +86,70 @@ func TestToolsSuite(t *testing.T) {
 		assert.Contains(t, resultJSON, `"filepath":"main.go"`, "the path must be echoed as given")
 	})
 
-	t.Run("PerformReadAcceptsAbsolutePaths", func(t *testing.T) {
+	t.Run("PerformReadAcceptsAbsolutePathsInsideTheRoot", func(t *testing.T) {
 		absolute := filepath.Join(root, "main.go")
 		resultJSON, err := tools.PerformRead(root, absolute, 1, 1)
 		require.NoError(t, err)
 		assert.Contains(t, resultJSON, "package main")
+	})
+
+	t.Run("PerformReadRejectsPathsOutsideTheRoot", func(t *testing.T) {
+		sibling := filepath.Join(filepath.Dir(root), "other-project", "secret.go")
+		require.NoError(t, os.MkdirAll(filepath.Dir(sibling), 0o755))
+		require.NoError(t, os.WriteFile(sibling, []byte("package other\n"), 0o644))
+
+		_, err := tools.PerformRead(root, "../other-project/secret.go", 1, 1)
+		require.Error(t, err, "a relative path must not climb out of the root")
+		assert.Contains(t, err.Error(), "outside the project root")
+
+		_, err = tools.PerformRead(root, sibling, 1, 1)
+		require.Error(t, err, "an absolute path must not name another project")
+		assert.Contains(t, err.Error(), "outside the project root")
+	})
+
+	t.Run("PerformReadRejectsSiblingWithASharedPrefix", func(t *testing.T) {
+		// "/tmp/app-other" must not pass a check written for "/tmp/app".
+		sibling := root + "-other"
+		require.NoError(t, os.MkdirAll(sibling, 0o755))
+		t.Cleanup(func() { os.RemoveAll(sibling) })
+		require.NoError(t, os.WriteFile(filepath.Join(sibling, "x.go"), []byte("package x\n"), 0o644))
+
+		_, err := tools.PerformRead(root, filepath.Join(sibling, "x.go"), 1, 1)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "outside the project root")
+	})
+
+	t.Run("PerformReadRejectsSymlinksPointingOutsideTheRoot", func(t *testing.T) {
+		outsideDir := t.TempDir()
+		target := filepath.Join(outsideDir, "secret.go")
+		require.NoError(t, os.WriteFile(target, []byte("package secret\n"), 0o644))
+
+		link := filepath.Join(root, "linked.go")
+		if err := os.Symlink(target, link); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+
+		_, err := tools.PerformRead(root, "linked.go", 1, 1)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "outside the project root")
+	})
+
+	t.Run("PerformEditRejectsPathsOutsideTheRoot", func(t *testing.T) {
+		sibling := filepath.Join(filepath.Dir(root), "edit-target", "keep.go")
+		require.NoError(t, os.MkdirAll(filepath.Dir(sibling), 0o755))
+		require.NoError(t, os.WriteFile(sibling, []byte("package keep\n"), 0o644))
+
+		_, err := tools.PerformEdit(db, root, sibling, 1, 1, "package hijacked")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "outside the project root")
+
+		untouched, readErr := os.ReadFile(sibling)
+		require.NoError(t, readErr)
+		assert.Equal(t, "package keep\n", string(untouched), "the file must not be written")
+
+		var foreign int
+		require.NoError(t, db.Get(&foreign, "SELECT COUNT(*) FROM chunk_search WHERE filepath IN (?, ?)", "keep.go", "../edit-target/keep.go"))
+		assert.Zero(t, foreign, "a rejected edit must not index the file")
 	})
 
 	t.Run("PerformEdit", func(t *testing.T) {
