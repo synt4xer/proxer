@@ -35,7 +35,7 @@ func newTestSession(t *testing.T) (*mcp.ClientSession, string) {
 	ctx := context.Background()
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
 
-	serverSession, err := New(db, root).mcp.Connect(ctx, serverTransport, nil)
+	serverSession, err := New(db, root, config.DefaultIgnoredDirs).mcp.Connect(ctx, serverTransport, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { serverSession.Close() })
 

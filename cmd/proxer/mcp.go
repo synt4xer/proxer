@@ -32,7 +32,7 @@ func newMCPCommand() *cobra.Command {
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 
-			return mcpserver.New(serverDB, root).Run(ctx, &mcp.StdioTransport{})
+			return mcpserver.New(serverDB, root, config.DefaultIgnoredDirs).Run(ctx, &mcp.StdioTransport{})
 		},
 	}
 }

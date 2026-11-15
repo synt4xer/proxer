@@ -38,7 +38,7 @@ func newToolWorkspace(t *testing.T) (string, *sqlx.DB) {
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 
-	require.NoError(t, indexer.IndexProject(db, root))
+	require.NoError(t, indexer.IndexProject(db, root, config.DefaultIgnoredDirs))
 	return root, db
 }
 
@@ -152,7 +152,7 @@ func TestToolsSuite(t *testing.T) {
 		require.NoError(t, os.MkdirAll(filepath.Dir(sibling), 0o755))
 		require.NoError(t, os.WriteFile(sibling, []byte("package keep\n"), 0o644))
 
-		_, err := tools.PerformEdit(db, root, sibling, 1, 1, "package hijacked", "")
+		_, err := tools.PerformEdit(db, root, sibling, 1, 1, "package hijacked", "", config.DefaultIgnoredDirs)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "outside the project root")
 
@@ -168,7 +168,7 @@ func TestToolsSuite(t *testing.T) {
 	t.Run("PerformEdit", func(t *testing.T) {
 		newContent := "\tfmt.Println(\"Data Processed Successfully\")\n\treturn true"
 
-		resultJSON, err := tools.PerformEdit(db, root, "main.go", 5, 7, newContent, "")
+		resultJSON, err := tools.PerformEdit(db, root, "main.go", 5, 7, newContent, "", config.DefaultIgnoredDirs)
 		require.NoError(t, err)
 		assert.Contains(t, resultJSON, "success")
 
@@ -197,7 +197,7 @@ func TestToolsSuite(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		_, err = tools.PerformEdit(db, root, "main.go", 1, 1, "package main // touched", "")
+		_, err = tools.PerformEdit(db, root, "main.go", 1, 1, "package main // touched", "", config.DefaultIgnoredDirs)
 		require.NoError(t, err)
 
 		var untouched int
@@ -210,7 +210,7 @@ func TestToolsSuite(t *testing.T) {
 	})
 
 	t.Run("PerformEditRejectsOutOfRange", func(t *testing.T) {
-		_, err := tools.PerformEdit(db, root, "main.go", 900, 901, "x", "")
+		_, err := tools.PerformEdit(db, root, "main.go", 900, 901, "x", "", config.DefaultIgnoredDirs)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid line range")
 	})
@@ -230,12 +230,12 @@ func TestPerformEditRejectsAStaleHash(t *testing.T) {
 	}
 
 	t.Run("acceptsTheHashFromTheLastRead", func(t *testing.T) {
-		_, err := tools.PerformEdit(db, root, "main.go", 1, 1, "package main", readHash(t))
+		_, err := tools.PerformEdit(db, root, "main.go", 1, 1, "package main", readHash(t), config.DefaultIgnoredDirs)
 		require.NoError(t, err)
 	})
 
 	t.Run("rejectsAnUnknownHash", func(t *testing.T) {
-		_, err := tools.PerformEdit(db, root, "main.go", 1, 1, "package hijacked", "deadbeef")
+		_, err := tools.PerformEdit(db, root, "main.go", 1, 1, "package hijacked", "deadbeef", config.DefaultIgnoredDirs)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "changed since it was read")
 
@@ -249,13 +249,13 @@ func TestPerformEditRejectsAStaleHash(t *testing.T) {
 
 		require.NoError(t, os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n// changed elsewhere\n"), 0o644))
 
-		_, err := tools.PerformEdit(db, root, "main.go", 1, 1, "package main", hash)
+		_, err := tools.PerformEdit(db, root, "main.go", 1, 1, "package main", hash, config.DefaultIgnoredDirs)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "changed since it was read")
 	})
 
 	t.Run("editingWithoutAHashStillWorks", func(t *testing.T) {
-		_, err := tools.PerformEdit(db, root, "main.go", 1, 1, "package main", "")
+		_, err := tools.PerformEdit(db, root, "main.go", 1, 1, "package main", "", config.DefaultIgnoredDirs)
 		require.NoError(t, err)
 	})
 }
@@ -265,7 +265,7 @@ func TestJSONOutputIsNotHTMLEscaped(t *testing.T) {
 
 	page := filepath.Join(root, "page.html")
 	require.NoError(t, os.WriteFile(page, []byte("<div>a & b</div>\n"), 0o644))
-	require.NoError(t, indexer.IndexProject(db, root))
+	require.NoError(t, indexer.IndexProject(db, root, config.DefaultIgnoredDirs))
 
 	t.Run("searchKeepsSnippetTagsLiteral", func(t *testing.T) {
 		resultJSON, err := tools.PerformSearch(db, root, "ProcessData")
@@ -287,7 +287,7 @@ func TestWriteFileAtomicallyKeepsTheContract(t *testing.T) {
 	root, db := newToolWorkspace(t)
 
 	t.Run("replacesContentWithoutLeavingTemporaryFiles", func(t *testing.T) {
-		_, err := tools.PerformEdit(db, root, "main.go", 1, 1, "package edited", "")
+		_, err := tools.PerformEdit(db, root, "main.go", 1, 1, "package edited", "", config.DefaultIgnoredDirs)
 		require.NoError(t, err)
 
 		leftovers, err := filepath.Glob(filepath.Join(root, ".proxer-edit-*"))
@@ -304,7 +304,7 @@ func TestWriteFileAtomicallyKeepsTheContract(t *testing.T) {
 		require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\necho one\necho two\n"), 0o750))
 		require.NoError(t, os.Chmod(path, 0o750))
 
-		_, err := tools.PerformEdit(db, root, "script.sh", 2, 2, "echo edited", "")
+		_, err := tools.PerformEdit(db, root, "script.sh", 2, 2, "echo edited", "", config.DefaultIgnoredDirs)
 		require.NoError(t, err)
 
 		info, err := os.Stat(path)
@@ -320,7 +320,7 @@ func TestWriteFileAtomicallyKeepsTheContract(t *testing.T) {
 			t.Skipf("symlinks unavailable: %v", err)
 		}
 
-		_, err := tools.PerformEdit(db, root, "link.go", 2, 2, "var a = 2", "")
+		_, err := tools.PerformEdit(db, root, "link.go", 2, 2, "var a = 2", "", config.DefaultIgnoredDirs)
 		require.NoError(t, err)
 
 		info, err := os.Lstat(link)

@@ -50,7 +50,7 @@ func TestReindexFileReplacesOnlyTheEditedFile(t *testing.T) {
 	require.NoError(t, os.WriteFile(untouched, []byte("func Untouched() {}\n"), 0o644))
 
 	db := openWorkspaceDB(t, root)
-	require.NoError(t, indexer.IndexProject(db, root))
+	require.NoError(t, indexer.IndexProject(db, root, config.DefaultIgnoredDirs))
 	require.Equal(t, 1, countChunks(t, db, "edited.go"))
 
 	// The edit both replaces the old marker and grows the file across a chunk
@@ -62,7 +62,7 @@ func TestReindexFileReplacesOnlyTheEditedFile(t *testing.T) {
 	}
 	require.NoError(t, os.WriteFile(edited, []byte(grown.String()), 0o644))
 
-	require.NoError(t, indexer.ReindexFile(db, root, edited))
+	require.NoError(t, indexer.ReindexFile(db, root, edited, config.DefaultIgnoredDirs))
 
 	editedContent := contentFor(t, db, "edited.go")
 	assert.Contains(t, editedContent, "After")
@@ -79,11 +79,11 @@ func TestReindexFileDropsChunksOfDeletedFile(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte("func Gone() {}\n"), 0o644))
 
 	db := openWorkspaceDB(t, root)
-	require.NoError(t, indexer.IndexProject(db, root))
+	require.NoError(t, indexer.IndexProject(db, root, config.DefaultIgnoredDirs))
 	require.Equal(t, 1, countChunks(t, db, "gone.go"))
 
 	require.NoError(t, os.Remove(path))
-	require.NoError(t, indexer.ReindexFile(db, root, path))
+	require.NoError(t, indexer.ReindexFile(db, root, path, config.DefaultIgnoredDirs))
 
 	assert.Equal(t, 0, countChunks(t, db, "gone.go"), "a deleted file must disappear from the index")
 }
@@ -95,13 +95,13 @@ func TestReindexFileKeysChunksByProjectPath(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte("func First() {}\n"), 0o644))
 
 	db := openWorkspaceDB(t, root)
-	require.NoError(t, indexer.IndexProject(db, root))
+	require.NoError(t, indexer.IndexProject(db, root, config.DefaultIgnoredDirs))
 
 	require.NoError(t, os.WriteFile(path, []byte("func Second() {}\n"), 0o644))
 
 	// The relative spelling must hit the same rows as the absolute one.
 	relative := filepath.Join("pkg", "file.go")
-	require.NoError(t, indexer.ReindexFile(db, root, filepath.Join(root, relative)))
+	require.NoError(t, indexer.ReindexFile(db, root, filepath.Join(root, relative), config.DefaultIgnoredDirs))
 
 	assert.Equal(t, 1, countChunks(t, db, "pkg/file.go"), "reindex must not duplicate rows")
 	assert.Contains(t, contentFor(t, db, "pkg/file.go"), "Second")
@@ -117,7 +117,7 @@ func TestReindexFileRejectsPathsOutsideTheRoot(t *testing.T) {
 
 	// Storing the file under a "../" key would be worse than failing: no later
 	// walk of the root can ever reach that key to clean it up.
-	err := indexer.ReindexFile(db, root, outside)
+	err := indexer.ReindexFile(db, root, outside, config.DefaultIgnoredDirs)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "outside the project root")
 
@@ -151,7 +151,7 @@ func TestReindexFileWaitsForConcurrentWriters(t *testing.T) {
 		wg.Add(1)
 		go func(i int, path string) {
 			defer wg.Done()
-			if err := indexer.ReindexFile(handles[i%len(handles)], root, path); err != nil {
+			if err := indexer.ReindexFile(handles[i%len(handles)], root, path, config.DefaultIgnoredDirs); err != nil {
 				errs <- err
 			}
 		}(i, path)
@@ -167,6 +167,24 @@ func TestReindexFileWaitsForConcurrentWriters(t *testing.T) {
 	}
 }
 
+func TestReindexFileDropsChunksOfAnIgnoredDirectory(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "generated", "gen.go")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte("func Generated() {}\n"), 0o644))
+
+	db := openWorkspaceDB(t, root)
+	ignored := append(append([]string{}, config.DefaultIgnoredDirs...), "generated")
+	// Seed the row a previous build without the skip list would have left.
+	require.NoError(t, indexer.IndexProject(db, root, config.DefaultIgnoredDirs))
+	require.Equal(t, 1, countChunks(t, db, "generated/gen.go"))
+
+	require.NoError(t, indexer.ReindexFile(db, root, path, ignored))
+
+	assert.Equal(t, 0, countChunks(t, db, "generated/gen.go"),
+		"editing a file inside an ignored directory must not keep it in the index")
+}
+
 func TestInitDBAcceptsPathsWithURIDelimiters(t *testing.T) {
 	// "file:" DSNs hand the path to SQLite's URI parser, so a "?" or "#" in a
 	// directory name must be escaped to stay part of the filename.
@@ -176,7 +194,7 @@ func TestInitDBAcceptsPathsWithURIDelimiters(t *testing.T) {
 	db := openWorkspaceDB(t, root)
 	path := filepath.Join(root, "main.go")
 	require.NoError(t, os.WriteFile(path, []byte("package odd\n"), 0o644))
-	require.NoError(t, indexer.ReindexFile(db, root, path))
+	require.NoError(t, indexer.ReindexFile(db, root, path, config.DefaultIgnoredDirs))
 
 	assert.Contains(t, contentFor(t, db, "main.go"), "package odd")
 }
