@@ -14,7 +14,10 @@ import (
 // against root but echoed back as given, so agents can chain read and edit
 // calls with the same spelling they already have in context.
 func PerformRead(root, path string, startLine, endLine int) (string, error) {
-	resolved := resolvePath(root, path)
+	resolved, err := resolvePath(root, path)
+	if err != nil {
+		return "", err
+	}
 
 	if _, err := os.Stat(resolved); os.IsNotExist(err) {
 		return "", fmt.Errorf("file '%s' not found. It may have been deleted", path)
