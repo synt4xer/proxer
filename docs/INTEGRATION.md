@@ -20,7 +20,7 @@ Proxer exposes no protocol server by default: the harness invokes the binary dir
 
 `proxer mcp` runs a stdio [MCP](https://modelcontextprotocol.io) server that exposes the four operations as tools named `index`, `search`, `read`, and `edit`. Use it when the harness speaks MCP and you want the tools in the agent's tool list rather than invoked as shell commands. The CLI and the Agent Skill keep working unchanged.
 
-The server resolves the root the same way the CLI does (`--root`, then `PROXER_ROOT`, then the working directory), opens `<root>/.proxer.db` for its lifetime, and closes it on shutdown. It writes only JSON-RPC to stdout; errors go to stderr. Every `filepath` argument is relative to the project root, and a path that resolves outside it is rejected, never clamped or rewritten.
+The server resolves the root the same way the CLI does (`--root`, then `PROXER_ROOT`, then the working directory), opens `<root>/.proxer.db` for its lifetime, and closes it on shutdown. It writes only JSON-RPC to stdout; errors go to stderr. Every `filepath` argument is relative to the project root, and a path that resolves outside it is rejected, never clamped or rewritten. Every `search` and `read` result carries the absolute `root` it came from, so a harness talking to several projects can tell which index a path belongs to.
 
 Register it per project. Pi reads project servers from `.pi/mcp.json` and user servers from `~/.pi/agent/mcp.json`:
 
@@ -47,6 +47,6 @@ pi mcp add -l proxer -- .agents/skills/proxer/scripts/proxer mcp --root .
 | Tool | Parameters | Result |
 | --- | --- | --- |
 | `index` | none | `{"status":"indexed_successfully"}` |
-| `search` | `keyword` | array of `{filepath, line, snippet}` |
-| `read` | `filepath`, `start` (default 1), `end` (default 60) | `{filepath, content}` |
+| `search` | `keyword` | array of `{root, filepath, line, snippet}` |
+| `read` | `filepath`, `start` (default 1), `end` (default 60) | `{root, filepath, content}` |
 | `edit` | `filepath`, `start`, `end`, `content` | `{status, message}` |
