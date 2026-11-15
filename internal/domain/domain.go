@@ -18,4 +18,5 @@ type ReadResultJSON struct {
 	Root     string `json:"root"`
 	Filepath string `json:"filepath"`
 	Content  string `json:"content"`
+	Hash     string `json:"hash"`
 }
