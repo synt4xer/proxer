@@ -14,7 +14,10 @@ import (
 // resolved against root, matching PerformRead, so a harness that spawns proxer
 // elsewhere still edits the file the agent is looking at.
 func PerformEdit(db *sqlx.DB, root, path string, startLine, endLine int, newContent string) (string, error) {
-	resolved := resolvePath(root, path)
+	resolved, err := resolvePath(root, path)
+	if err != nil {
+		return "", err
+	}
 
 	if _, err := os.Stat(resolved); os.IsNotExist(err) {
 		return "", fmt.Errorf("file '%s' not found", path)
