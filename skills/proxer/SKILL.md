@@ -32,7 +32,7 @@ If the harness has a `proxer` MCP server connected, prefer its tools over the sh
 - `mcp__proxer__read` — `{"filepath": "...", "start": 40, "end": 70}`; `start` defaults to 1 and `end` to 60.
 - `mcp__proxer__edit` — `{"filepath": "...", "start": 52, "end": 58, "content": "..."}`.
 
-The MCP server fixes the root when it starts, so its tools take no `--root` and every `filepath` is relative to that root. Everything below applies to both interfaces: the same matching, the same path containment, and the same auto-reindex after `edit`.
+The MCP server fixes the root when it starts, so its tools take no `--root` and every `filepath` is relative to that root. Every `search` and `read` result includes that absolute root, so when several `proxer` servers are connected the paths stay attributable. Everything below applies to both interfaces: the same matching, the same path containment, and the same auto-reindex after `edit`.
 
 Use the shell binary when no MCP server is connected, when you need `--root` for another project, or when the harness only exposes the skill.
 
@@ -59,7 +59,7 @@ The index is a snapshot. Re-run `index` after `git checkout`, `git pull`, or any
 ./.agents/skills/proxer/scripts/proxer search -k "authMiddleware"
 ```
 
-Returns a JSON array of at most 5 matches, each with `filepath`, `line` (`"start-end"`), and `snippet` with `<b>` around the matched text.
+Returns a JSON array of at most 5 matches, each with `root` (the absolute path of the indexed project), `filepath`, `line` (`"start-end"`), and `snippet` with `<b>` around the matched text.
 
 How matching behaves:
 
@@ -76,7 +76,7 @@ Results come from 60-line chunks with a 15-line overlap, so `line` is the chunk 
 ./.agents/skills/proxer/scripts/proxer read -f "internal/auth.go" -s 40 -e 70
 ```
 
-Returns `{"filepath": "...", "content": "..."}` for the inclusive range `-s` .. `-e`. Line numbers start at 1 and match what `search` reports.
+Returns `{"root": "...", "filepath": "...", "content": "..."}` for the inclusive range `-s` .. `-e`. Line numbers start at 1 and match what `search` reports.
 
 Read the range before editing it: `edit` needs exact boundaries.
 
