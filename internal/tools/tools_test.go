@@ -3,6 +3,7 @@ package tools_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jmoiron/sqlx"
@@ -200,5 +201,55 @@ func TestToolsSuite(t *testing.T) {
 		_, err := tools.PerformEdit(db, root, "main.go", 900, 901, "x")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid line range")
+	})
+}
+
+func TestWriteFileAtomicallyKeepsTheContract(t *testing.T) {
+	root, db := newToolWorkspace(t)
+
+	t.Run("replacesContentWithoutLeavingTemporaryFiles", func(t *testing.T) {
+		_, err := tools.PerformEdit(db, root, "main.go", 1, 1, "package edited")
+		require.NoError(t, err)
+
+		leftovers, err := filepath.Glob(filepath.Join(root, ".proxer-edit-*"))
+		require.NoError(t, err)
+		assert.Empty(t, leftovers, "the temporary file must not survive the rename")
+
+		content, err := os.ReadFile(filepath.Join(root, "main.go"))
+		require.NoError(t, err)
+		assert.True(t, strings.HasPrefix(string(content), "package edited\n"))
+	})
+
+	t.Run("preservesFilePermissions", func(t *testing.T) {
+		path := filepath.Join(root, "script.sh")
+		require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\necho one\necho two\n"), 0o750))
+		require.NoError(t, os.Chmod(path, 0o750))
+
+		_, err := tools.PerformEdit(db, root, "script.sh", 2, 2, "echo edited")
+		require.NoError(t, err)
+
+		info, err := os.Stat(path)
+		require.NoError(t, err)
+		assert.Equal(t, os.FileMode(0o750), info.Mode().Perm(), "the rename must not reset the mode")
+	})
+
+	t.Run("keepsASymlinkASymlink", func(t *testing.T) {
+		target := filepath.Join(root, "real.go")
+		require.NoError(t, os.WriteFile(target, []byte("package real\nvar a = 1\n"), 0o644))
+		link := filepath.Join(root, "link.go")
+		if err := os.Symlink(target, link); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+
+		_, err := tools.PerformEdit(db, root, "link.go", 2, 2, "var a = 2")
+		require.NoError(t, err)
+
+		info, err := os.Lstat(link)
+		require.NoError(t, err)
+		assert.NotZero(t, info.Mode()&os.ModeSymlink, "editing through a link must not replace it")
+
+		updated, err := os.ReadFile(target)
+		require.NoError(t, err)
+		assert.Contains(t, string(updated), "var a = 2")
 	})
 }
