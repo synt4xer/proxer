@@ -10,12 +10,17 @@ import (
 	"github.com/synt4xer/proxer/internal/indexer"
 )
 
-func PerformEdit(db *sqlx.DB, filepath string, startLine, endLine int, newContent string) (string, error) {
-	if _, err := os.Stat(filepath); os.IsNotExist(err) {
-		return "", fmt.Errorf("file '%s' not found", filepath)
+// PerformEdit replaces a line range in a file and reindexes it. The path is
+// resolved against root, matching PerformRead, so a harness that spawns proxer
+// elsewhere still edits the file the agent is looking at.
+func PerformEdit(db *sqlx.DB, root, path string, startLine, endLine int, newContent string) (string, error) {
+	resolved := resolvePath(root, path)
+
+	if _, err := os.Stat(resolved); os.IsNotExist(err) {
+		return "", fmt.Errorf("file '%s' not found", path)
 	}
 
-	contentBytes, err := os.ReadFile(filepath)
+	contentBytes, err := os.ReadFile(resolved)
 	if err != nil {
 		return "", fmt.Errorf("failed to read file: %w", err)
 	}
@@ -39,19 +44,19 @@ func PerformEdit(db *sqlx.DB, filepath string, startLine, endLine int, newConten
 
 	finalContent := strings.Join(finalLines, "\n")
 
-	err = os.WriteFile(filepath, []byte(finalContent), 0644)
+	err = os.WriteFile(resolved, []byte(finalContent), 0o644)
 	if err != nil {
 		return "", fmt.Errorf("failed to save file: %w", err)
 	}
 
-	err = indexer.IndexProject(db, ".")
+	err = indexer.ReindexFile(db, root, resolved)
 	if err != nil {
-		return "", fmt.Errorf("file saved, but auto-index failed: %w", err)
+		return "", fmt.Errorf("file saved, but reindexing it failed: %w", err)
 	}
 
 	successMsg := map[string]string{
 		"status":  "success",
-		"message": fmt.Sprintf("Successfully replaced lines %d-%d in %s and auto-updated the search index.", startLine, endLine, filepath),
+		"message": fmt.Sprintf("Successfully replaced lines %d-%d in %s and reindexed it.", startLine, endLine, path),
 	}
 	out, err := json.Marshal(successMsg)
 	if err != nil {
