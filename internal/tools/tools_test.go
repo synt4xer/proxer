@@ -152,7 +152,7 @@ func TestToolsSuite(t *testing.T) {
 		require.NoError(t, os.MkdirAll(filepath.Dir(sibling), 0o755))
 		require.NoError(t, os.WriteFile(sibling, []byte("package keep\n"), 0o644))
 
-		_, err := tools.PerformEdit(db, root, sibling, 1, 1, "package hijacked")
+		_, err := tools.PerformEdit(db, root, sibling, 1, 1, "package hijacked", "")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "outside the project root")
 
@@ -168,7 +168,7 @@ func TestToolsSuite(t *testing.T) {
 	t.Run("PerformEdit", func(t *testing.T) {
 		newContent := "\tfmt.Println(\"Data Processed Successfully\")\n\treturn true"
 
-		resultJSON, err := tools.PerformEdit(db, root, "main.go", 5, 7, newContent)
+		resultJSON, err := tools.PerformEdit(db, root, "main.go", 5, 7, newContent, "")
 		require.NoError(t, err)
 		assert.Contains(t, resultJSON, "success")
 
@@ -197,7 +197,7 @@ func TestToolsSuite(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		_, err = tools.PerformEdit(db, root, "main.go", 1, 1, "package main // touched")
+		_, err = tools.PerformEdit(db, root, "main.go", 1, 1, "package main // touched", "")
 		require.NoError(t, err)
 
 		var untouched int
@@ -210,9 +210,53 @@ func TestToolsSuite(t *testing.T) {
 	})
 
 	t.Run("PerformEditRejectsOutOfRange", func(t *testing.T) {
-		_, err := tools.PerformEdit(db, root, "main.go", 900, 901, "x")
+		_, err := tools.PerformEdit(db, root, "main.go", 900, 901, "x", "")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid line range")
+	})
+}
+
+func TestPerformEditRejectsAStaleHash(t *testing.T) {
+	root, db := newToolWorkspace(t)
+
+	readHash := func(t *testing.T) string {
+		t.Helper()
+		resultJSON, err := tools.PerformRead(root, "main.go", 5, 7)
+		require.NoError(t, err)
+		var result domain.ReadResultJSON
+		require.NoError(t, json.Unmarshal([]byte(resultJSON), &result))
+		require.NotEmpty(t, result.Hash)
+		return result.Hash
+	}
+
+	t.Run("acceptsTheHashFromTheLastRead", func(t *testing.T) {
+		_, err := tools.PerformEdit(db, root, "main.go", 1, 1, "package main", readHash(t))
+		require.NoError(t, err)
+	})
+
+	t.Run("rejectsAnUnknownHash", func(t *testing.T) {
+		_, err := tools.PerformEdit(db, root, "main.go", 1, 1, "package hijacked", "deadbeef")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "changed since it was read")
+
+		content, readErr := os.ReadFile(filepath.Join(root, "main.go"))
+		require.NoError(t, readErr)
+		assert.NotContains(t, string(content), "hijacked", "a stale edit must not touch the file")
+	})
+
+	t.Run("rejectsAChangeOutsideTheEditedRange", func(t *testing.T) {
+		hash := readHash(t)
+
+		require.NoError(t, os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n// changed elsewhere\n"), 0o644))
+
+		_, err := tools.PerformEdit(db, root, "main.go", 1, 1, "package main", hash)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "changed since it was read")
+	})
+
+	t.Run("editingWithoutAHashStillWorks", func(t *testing.T) {
+		_, err := tools.PerformEdit(db, root, "main.go", 1, 1, "package main", "")
+		require.NoError(t, err)
 	})
 }
 
@@ -243,7 +287,7 @@ func TestWriteFileAtomicallyKeepsTheContract(t *testing.T) {
 	root, db := newToolWorkspace(t)
 
 	t.Run("replacesContentWithoutLeavingTemporaryFiles", func(t *testing.T) {
-		_, err := tools.PerformEdit(db, root, "main.go", 1, 1, "package edited")
+		_, err := tools.PerformEdit(db, root, "main.go", 1, 1, "package edited", "")
 		require.NoError(t, err)
 
 		leftovers, err := filepath.Glob(filepath.Join(root, ".proxer-edit-*"))
@@ -260,7 +304,7 @@ func TestWriteFileAtomicallyKeepsTheContract(t *testing.T) {
 		require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\necho one\necho two\n"), 0o750))
 		require.NoError(t, os.Chmod(path, 0o750))
 
-		_, err := tools.PerformEdit(db, root, "script.sh", 2, 2, "echo edited")
+		_, err := tools.PerformEdit(db, root, "script.sh", 2, 2, "echo edited", "")
 		require.NoError(t, err)
 
 		info, err := os.Stat(path)
@@ -276,7 +320,7 @@ func TestWriteFileAtomicallyKeepsTheContract(t *testing.T) {
 			t.Skipf("symlinks unavailable: %v", err)
 		}
 
-		_, err := tools.PerformEdit(db, root, "link.go", 2, 2, "var a = 2")
+		_, err := tools.PerformEdit(db, root, "link.go", 2, 2, "var a = 2", "")
 		require.NoError(t, err)
 
 		info, err := os.Lstat(link)
