@@ -14,8 +14,10 @@ import (
 // resolved against root, matching PerformRead, so a harness that spawns proxer
 // elsewhere still edits the file the agent is looking at. When expectedHash is
 // non-empty it must match the file's current content hash; a mismatch means the
-// file changed after it was read, and the edit is refused.
-func PerformEdit(db *sqlx.DB, root, path string, startLine, endLine int, newContent, expectedHash string) (string, error) {
+// file changed after it was read, and the edit is refused. ignoredDirs is the
+// project's skip list, so editing a file inside an ignored directory does not
+// add it back to the index.
+func PerformEdit(db *sqlx.DB, root, path string, startLine, endLine int, newContent, expectedHash string, ignoredDirs []string) (string, error) {
 	resolved, err := resolvePath(root, path)
 	if err != nil {
 		return "", err
@@ -59,7 +61,7 @@ func PerformEdit(db *sqlx.DB, root, path string, startLine, endLine int, newCont
 		return "", fmt.Errorf("failed to save file: %w", err)
 	}
 
-	err = indexer.ReindexFile(db, root, resolved)
+	err = indexer.ReindexFile(db, root, resolved, ignoredDirs)
 	if err != nil {
 		return "", fmt.Errorf("file saved, but reindexing it failed: %w", err)
 	}

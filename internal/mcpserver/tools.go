@@ -54,7 +54,7 @@ func (s *Server) addIndexTool() {
 			"Run this once after checkout and again after changes made outside proxer; it replaces the existing index. " +
 			"No parameters are needed: the root is fixed when the server starts.",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, _ indexInput) (*mcp.CallToolResult, indexOutput, error) {
-		if err := indexer.IndexProject(s.db, s.root); err != nil {
+		if err := indexer.IndexProject(s.db, s.root, s.ignoredDirs); err != nil {
 			return nil, indexOutput{}, err
 		}
 		return nil, indexOutput{Status: "indexed_successfully"}, nil
@@ -122,7 +122,7 @@ func (s *Server) addEditTool() {
 			"The replacement need not have the same number of lines as the range. The file is written atomically. " +
 			"Pass the hash from a prior read of the same file: if the file changed since that read, the edit is rejected and nothing is written.",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in editInput) (*mcp.CallToolResult, editOutput, error) {
-		resultJSON, err := tools.PerformEdit(s.db, s.root, in.Filepath, in.Start, in.End, in.Content, in.Hash)
+		resultJSON, err := tools.PerformEdit(s.db, s.root, in.Filepath, in.Start, in.End, in.Content, in.Hash, s.ignoredDirs)
 		if err != nil {
 			return nil, editOutput{}, err
 		}
