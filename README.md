@@ -82,8 +82,8 @@ Results are printed as JSON on stdout; failures go to stderr with a non-zero exi
 | Command | Purpose |
 | --- | --- |
 | `index` | Rebuild `.proxer.db` from the project tree. |
-| `search -k <keyword>` | Return up to 5 matching chunks with `filepath`, `line`, and `snippet`. |
-| `read -f <file> -s <start> -e <end>` | Return the inclusive line range as JSON. |
+| `search -k <keyword>` | Return up to 5 matching chunks with `root`, `filepath`, `line`, and `snippet`. |
+| `read -f <file> -s <start> -e <end>` | Return `root`, `filepath`, and the inclusive line range as JSON. |
 | `edit -f <file> -s <start> -e <end>` | Replace the range with stdin content, then reindex that file. |
 | `mcp` | Serve all four operations as MCP tools over stdio. |
 
@@ -108,16 +108,18 @@ From outside the project, name the root instead of changing directory:
 ```
 
 ```
-[{"filepath":"internal/auth.go","line":"40-99","snippet":"...<b>AuthMiddleware</b>..."}]
+[{"root":"/home/dev/code/my-awesome-project","filepath":"internal/auth.go","line":"40-99","snippet":"...<b>AuthMiddleware</b>..."}]
 ```
 
-`line` is the chunk boundary, not the exact hit. Use the snippet to locate the match inside the chunk.
+`root` is the absolute path of the indexed project, so results stay unambiguous when one harness drives several projects. `line` is the chunk boundary, not the exact hit. Use the snippet to locate the match inside the chunk.
 
 ### Read
 
 ```bash
 ./.agents/skills/proxer/scripts/proxer read -f "internal/auth.go" -s 40 -e 70
 ```
+
+The result is `{"root": "...", "filepath": "...", "content": "..."}`; `root` is the absolute path of the indexed project and `filepath` is echoed as given.
 
 ### Edit
 
