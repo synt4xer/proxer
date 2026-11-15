@@ -24,6 +24,11 @@ func ProcessData() string {
 
 func newTestSession(t *testing.T) (*mcp.ClientSession, string) {
 	t.Helper()
+	return newTestSessionWithIgnores(t, config.DefaultIgnoredDirs)
+}
+
+func newTestSessionWithIgnores(t *testing.T, ignoredDirs []string) (*mcp.ClientSession, string) {
+	t.Helper()
 
 	root := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(root, "main.go"), []byte(mockCode), 0o644))
@@ -35,7 +40,7 @@ func newTestSession(t *testing.T) (*mcp.ClientSession, string) {
 	ctx := context.Background()
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
 
-	serverSession, err := New(db, root, config.DefaultIgnoredDirs).mcp.Connect(ctx, serverTransport, nil)
+	serverSession, err := New(db, root, ignoredDirs).mcp.Connect(ctx, serverTransport, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { serverSession.Close() })
 
@@ -147,4 +152,18 @@ func TestServerReturnsNoMatchesWithoutError(t *testing.T) {
 	res := callTool(t, cs, "search", map[string]any{"keyword": "no-such-identifier"})
 	require.False(t, res.IsError)
 	assert.Equal(t, "[]", resultText(t, res))
+}
+
+func TestServerIndexHonorsTheProjectSkipList(t *testing.T) {
+	ignored := append(append([]string{}, config.DefaultIgnoredDirs...), "generated")
+	cs, root := newTestSessionWithIgnores(t, ignored)
+
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "generated"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "generated", "gen.go"), []byte("func GeneratedMarker() {}\n"), 0o644))
+
+	require.False(t, callTool(t, cs, "index", map[string]any{}).IsError)
+
+	res := callTool(t, cs, "search", map[string]any{"keyword": "GeneratedMarker"})
+	require.False(t, res.IsError)
+	assert.Equal(t, "[]", resultText(t, res), "the index tool must honor the skip list the server was built with")
 }
