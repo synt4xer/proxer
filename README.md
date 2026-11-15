@@ -139,4 +139,4 @@ Proxer plugs into an agent harness in two ways:
 - **Agent Skill** — `skills/proxer/SKILL.md` follows the [Agent Skills specification](https://agentskills.io/specification), so any harness that discovers `.agents/skills/<name>/SKILL.md` loads it. `make install` places the package correctly.
 - **MCP server** — `proxer mcp` serves `index`, `search`, `read`, and `edit` as MCP tools over stdio.
 
-Setup for both, including a per-project `.pi/mcp.json`, lives in [docs/integration.md](docs/integration.md).
+Setup for both, including a per-project `.pi/mcp.json`, lives in [docs/INTEGRATION.md](docs/INTEGRATION.md).
