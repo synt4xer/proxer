@@ -119,6 +119,67 @@ func IndexProject(db *sqlx.DB, rootPath string) error {
 	return tx.Commit()
 }
 
+// ReindexFile replaces the stored chunks of a single file. Editing a file only
+// shifts line numbers inside that file, so every other row in the index stays
+// valid and never has to be rebuilt.
+func ReindexFile(db *sqlx.DB, rootPath, path string) error {
+	rel, err := relativePath(rootPath, path)
+	if err != nil {
+		return err
+	}
+
+	tx, err := db.Beginx()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if err := deleteChunks(tx, rel); err != nil {
+		return err
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// The file is gone, so dropping its chunks is the whole job.
+			return tx.Commit()
+		}
+		return fmt.Errorf("failed to read %s: %w", rel, err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("failed to stat %s: %w", rel, err)
+	}
+	if !filesystem.IsIndexableFile(info) {
+		// The file grew past the size limit or lost an indexable extension:
+		// it must no longer be reachable through search.
+		return tx.Commit()
+	}
+
+	stmt, err := tx.Preparex(insertChunkSQL)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	if err := insertChunks(stmt, rel, string(content)); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
+// deleteChunks drops every row stored under rel. FTS5 tables have no secondary
+// indexes, so the delete scans the table, which is still far cheaper than
+// rebuilding the whole project.
+func deleteChunks(tx *sqlx.Tx, rel string) error {
+	if _, err := tx.Exec("DELETE FROM chunk_search WHERE filepath = ?", rel); err != nil {
+		return fmt.Errorf("failed to drop stale chunks for %s: %w", rel, err)
+	}
+	return nil
+}
+
 // insertChunks splits content into overlapping windows and stores each window
 // under rel. Callers produce rel once so every path in the index has the same
 // shape regardless of how the root was supplied.
