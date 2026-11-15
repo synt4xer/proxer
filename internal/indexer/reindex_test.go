@@ -1,9 +1,11 @@
 package indexer_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/jmoiron/sqlx"
@@ -120,4 +122,61 @@ func TestReindexFileRejectsPathsOutsideTheRoot(t *testing.T) {
 	assert.Contains(t, err.Error(), "outside the project root")
 
 	assert.Zero(t, countChunks(t, db, "../sibling-project/foreign.go"))
+}
+
+// TestReindexFileWaitsForConcurrentWriters models the CLI and a long-running
+// server sharing one index. Before the busy timeout and BEGIN IMMEDIATE, the
+// FTS5 delete took a read snapshot first and the write upgrade failed at once
+// with SQLITE_BUSY instead of queuing.
+func TestReindexFileWaitsForConcurrentWriters(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, config.DBFile)
+
+	first := openWorkspaceDB(t, root)
+	second, err := indexer.InitDB(dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { second.Close() })
+
+	handles := []*sqlx.DB{first, second}
+
+	files := make([]string, 6)
+	for i := range files {
+		files[i] = filepath.Join(root, fmt.Sprintf("file%d.go", i))
+		require.NoError(t, os.WriteFile(files[i], []byte("package p\n"), 0o644))
+	}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, len(files))
+	for i, path := range files {
+		wg.Add(1)
+		go func(i int, path string) {
+			defer wg.Done()
+			if err := indexer.ReindexFile(handles[i%len(handles)], root, path); err != nil {
+				errs <- err
+			}
+		}(i, path)
+	}
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		t.Errorf("a concurrent reindex failed instead of waiting: %v", err)
+	}
+	for i := range files {
+		assert.Equal(t, 1, countChunks(t, first, fmt.Sprintf("file%d.go", i)))
+	}
+}
+
+func TestInitDBAcceptsPathsWithURIDelimiters(t *testing.T) {
+	// "file:" DSNs hand the path to SQLite's URI parser, so a "?" or "#" in a
+	// directory name must be escaped to stay part of the filename.
+	root := filepath.Join(t.TempDir(), "odd ? # name")
+	require.NoError(t, os.MkdirAll(root, 0o755))
+
+	db := openWorkspaceDB(t, root)
+	path := filepath.Join(root, "main.go")
+	require.NoError(t, os.WriteFile(path, []byte("package odd\n"), 0o644))
+	require.NoError(t, indexer.ReindexFile(db, root, path))
+
+	assert.Contains(t, contentFor(t, db, "main.go"), "package odd")
 }
