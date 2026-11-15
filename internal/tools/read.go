@@ -3,7 +3,6 @@ package tools
 import (
 	"bufio"
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"os"
 
@@ -54,9 +53,9 @@ func PerformRead(root, path string, startLine, endLine int) (string, error) {
 		Content:  contentBuilder.String(),
 	}
 
-	out, err := json.Marshal(result)
+	out, err := encodeJSON(result)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal JSON: %w", err)
 	}
-	return string(out), nil
+	return out, nil
 }

@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 	"unicode"
@@ -65,9 +64,9 @@ func PerformSearch(db *sqlx.DB, root, keyword string) (string, error) {
 		})
 	}
 
-	out, err := json.Marshal(jsonResults)
+	out, err := encodeJSON(jsonResults)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal JSON: %w", err)
 	}
-	return string(out), nil
+	return out, nil
 }

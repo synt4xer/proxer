@@ -215,6 +215,29 @@ func TestToolsSuite(t *testing.T) {
 	})
 }
 
+func TestJSONOutputIsNotHTMLEscaped(t *testing.T) {
+	root, db := newToolWorkspace(t)
+
+	page := filepath.Join(root, "page.html")
+	require.NoError(t, os.WriteFile(page, []byte("<div>a & b</div>\n"), 0o644))
+	require.NoError(t, indexer.IndexProject(db, root))
+
+	t.Run("searchKeepsSnippetTagsLiteral", func(t *testing.T) {
+		resultJSON, err := tools.PerformSearch(db, "ProcessData")
+		require.NoError(t, err)
+		assert.Contains(t, resultJSON, "<b>ProcessData</b>")
+		assert.NotContains(t, resultJSON, `\u003c`)
+	})
+
+	t.Run("readKeepsContentLiteral", func(t *testing.T) {
+		resultJSON, err := tools.PerformRead(root, "page.html", 1, 1)
+		require.NoError(t, err)
+		assert.Contains(t, resultJSON, "<div>a & b</div>")
+		assert.NotContains(t, resultJSON, `\u003c`)
+		assert.NotContains(t, resultJSON, `\u0026`)
+	})
+}
+
 func TestWriteFileAtomicallyKeepsTheContract(t *testing.T) {
 	root, db := newToolWorkspace(t)
 
