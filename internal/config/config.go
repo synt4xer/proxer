@@ -1,9 +1,13 @@
 package config
 
 import (
+	"bytes"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -68,7 +72,10 @@ func expandHome(path string) string {
 	return filepath.Join(home, path[2:])
 }
 
-var IgnoredDirs = []string{
+// DefaultIgnoredDirs is the built-in skip list. A project extends it through
+// ConfigFile; the defaults always stay in force so an unconfigured project
+// cannot accidentally index node_modules or a build directory.
+var DefaultIgnoredDirs = []string{
 	".git", ".vscode", ".idea", ".github",
 	".agents",
 	"node_modules", "vendor",
@@ -76,6 +83,65 @@ var IgnoredDirs = []string{
 	"bin", "obj", "tmp", "coverage",
 	".next", ".nuxt", ".svelte-kit",
 	".astro",
+}
+
+// ConfigFile is the optional per-project configuration read from the project
+// root.
+const ConfigFile = ".proxer.json"
+
+// ProjectConfig is the on-disk shape of ConfigFile.
+type ProjectConfig struct {
+	IgnoredDirs []string `json:"ignored_dirs"`
+}
+
+// LoadIgnoredDirs returns DefaultIgnoredDirs extended with the directories the
+// project lists in ConfigFile. A missing or empty file yields the defaults, so
+// an unconfigured project behaves exactly as before. A malformed file is an
+// error: falling back silently would index directories the project excluded.
+func LoadIgnoredDirs(root string) ([]string, error) {
+	ignored := slices.Clone(DefaultIgnoredDirs)
+
+	data, err := os.ReadFile(filepath.Join(root, ConfigFile))
+	if errors.Is(err, os.ErrNotExist) {
+		return ignored, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to read %s: %w", ConfigFile, err)
+	}
+	if len(bytes.TrimSpace(data)) == 0 {
+		return ignored, nil
+	}
+
+	var cfg ProjectConfig
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&cfg); err != nil {
+		return nil, fmt.Errorf("invalid %s: %w", ConfigFile, err)
+	}
+
+	for _, dir := range cfg.IgnoredDirs {
+		if err := validateIgnoredDir(dir); err != nil {
+			return nil, fmt.Errorf("invalid %s: %w", ConfigFile, err)
+		}
+		if !slices.Contains(ignored, dir) {
+			ignored = append(ignored, dir)
+		}
+	}
+
+	return ignored, nil
+}
+
+// validateIgnoredDir rejects entries that can never match. Directories are
+// matched by base name at any depth, so an entry with a path separator would
+// silently never apply, which is worse than refusing to start.
+func validateIgnoredDir(dir string) error {
+	if dir == "" {
+		return fmt.Errorf("ignored_dirs must not contain an empty name")
+	}
+	if dir == "." || dir == ".." || strings.ContainsAny(dir, `/\`) {
+		return fmt.Errorf("ignored_dirs entry %q must be a single directory name, not a path", dir)
+	}
+	return nil
 }
 
 var AllowedExtensions = []string{
