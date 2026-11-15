@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -61,11 +60,11 @@ func PerformEdit(db *sqlx.DB, root, path string, startLine, endLine int, newCont
 		"status":  "success",
 		"message": fmt.Sprintf("Successfully replaced lines %d-%d in %s and reindexed it.", startLine, endLine, path),
 	}
-	out, err := json.Marshal(successMsg)
+	out, err := encodeJSON(successMsg)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal JSON: %w", err)
 	}
-	return string(out), nil
+	return out, nil
 }
 
 // writeFileAtomically replaces path through a temporary file in the same
