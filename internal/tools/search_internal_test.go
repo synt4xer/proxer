@@ -16,31 +16,31 @@ func TestBuildMatchQuery(t *testing.T) {
 		{
 			name:     "single identifier",
 			keyword:  "authMiddleware",
-			expected: `"authMiddleware"`,
+			expected: `"authMiddleware"*`,
 			ok:       true,
 		},
 		{
 			name:     "underscore survives tokenization",
 			keyword:  "auth_middleware",
-			expected: `"auth_middleware"`,
+			expected: `"auth_middleware"*`,
 			ok:       true,
 		},
 		{
 			name:     "FTS5 operators are neutralized",
 			keyword:  `Auth( AND * NOT`,
-			expected: `"Auth" OR "AND" OR "NOT"`,
+			expected: `"Auth"* OR "AND"* OR "NOT"*`,
 			ok:       true,
 		},
 		{
 			name:     "natural language question",
 			keyword:  "where is auth (middleware)?",
-			expected: `"where" OR "is" OR "auth" OR "middleware"`,
+			expected: `"where"* OR "is"* OR "auth"* OR "middleware"*`,
 			ok:       true,
 		},
 		{
 			name:     "double quotes are escaped",
 			keyword:  `say "hello"`,
-			expected: `"say" OR "hello"`,
+			expected: `"say"* OR "hello"*`,
 			ok:       true,
 		},
 		{

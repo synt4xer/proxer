@@ -13,6 +13,8 @@ import (
 // buildMatchQuery converts free-form agent input into a valid FTS5 expression.
 // Every term is wrapped in double quotes so operators, parentheses, and stray
 // punctuation from natural language cannot reach the FTS5 parser as syntax.
+// Each term is also a prefix query, because agents search for fragments like
+// "auth" and expect to reach identifiers such as "AuthMiddleware".
 // Empty input is reported through the boolean instead of an erroring query.
 func buildMatchQuery(keyword string) (string, bool) {
 	terms := strings.FieldsFunc(keyword, func(r rune) bool {
@@ -21,7 +23,7 @@ func buildMatchQuery(keyword string) (string, bool) {
 
 	quoted := make([]string, 0, len(terms))
 	for _, term := range terms {
-		quoted = append(quoted, `"`+strings.ReplaceAll(term, `"`, `""`)+`"`)
+		quoted = append(quoted, `"`+strings.ReplaceAll(term, `"`, `""`)+`"*`)
 	}
 
 	if len(quoted) == 0 {
