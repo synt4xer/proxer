@@ -98,12 +98,14 @@ func TestServerWorkflow(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, readRes)), &read))
 	assert.Contains(t, read.Content, "ProcessData")
 	assert.Equal(t, root, read.Root)
+	assert.Len(t, read.Hash, 64, "read must return a hash for edit to check")
 
 	editRes := callTool(t, cs, "edit", map[string]any{
 		"filepath": "main.go",
 		"start":    3,
 		"end":      3,
 		"content":  "\treturn \"edited\"",
+		"hash":     read.Hash,
 	})
 	require.False(t, editRes.IsError)
 	assert.Contains(t, resultText(t, editRes), "success")
@@ -123,6 +125,20 @@ func TestServerRejectsPathsOutsideTheRoot(t *testing.T) {
 	res := callTool(t, cs, "read", map[string]any{"filepath": "../secret.go"})
 	assert.True(t, res.IsError)
 	assert.Contains(t, resultText(t, res), "outside the project root")
+}
+
+func TestServerRejectsAStaleEditHash(t *testing.T) {
+	cs, _ := newTestSession(t)
+
+	res := callTool(t, cs, "edit", map[string]any{
+		"filepath": "main.go",
+		"start":    1,
+		"end":      1,
+		"content":  "package hijacked",
+		"hash":     "deadbeef",
+	})
+	assert.True(t, res.IsError)
+	assert.Contains(t, resultText(t, res), "changed since it was read")
 }
 
 func TestServerReturnsNoMatchesWithoutError(t *testing.T) {

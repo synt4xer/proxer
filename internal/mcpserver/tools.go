@@ -32,6 +32,7 @@ type editInput struct {
 	Start    int    `json:"start" jsonschema:"first line to replace, inclusive"`
 	End      int    `json:"end" jsonschema:"last line to replace, inclusive"`
 	Content  string `json:"content" jsonschema:"replacement text for the line range; it need not have the same number of lines as the range"`
+	Hash     string `json:"hash,omitempty" jsonschema:"hash returned by an earlier read of this file; when set, the edit is rejected if the file changed since that read"`
 }
 
 type editOutput struct {
@@ -89,7 +90,8 @@ func (s *Server) addReadTool() {
 		Name: "read",
 		Description: "Read an inclusive line range from a file. The filepath is relative to the project root; " +
 			"absolute paths inside the root are accepted and paths outside it are rejected. " +
-			"Returns the absolute project root, the filepath as given, and the requested lines, each terminated by a newline.",
+			"Returns the absolute project root, the filepath as given, the requested lines (each terminated by a newline), " +
+			"and a hash of the file. Pass that hash to edit so a change between the read and the edit is refused.",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in readInput) (*mcp.CallToolResult, domain.ReadResultJSON, error) {
 		start, end := in.Start, in.End
 		if start <= 0 {
@@ -117,9 +119,10 @@ func (s *Server) addEditTool() {
 		Name: "edit",
 		Description: "Replace an inclusive line range in a file and reindex the file. The filepath is relative to the project root; " +
 			"absolute paths inside the root are accepted and paths outside it are rejected. " +
-			"The replacement need not have the same number of lines as the range. The file is written atomically.",
+			"The replacement need not have the same number of lines as the range. The file is written atomically. " +
+			"Pass the hash from a prior read of the same file: if the file changed since that read, the edit is rejected and nothing is written.",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in editInput) (*mcp.CallToolResult, editOutput, error) {
-		resultJSON, err := tools.PerformEdit(s.db, s.root, in.Filepath, in.Start, in.End, in.Content)
+		resultJSON, err := tools.PerformEdit(s.db, s.root, in.Filepath, in.Start, in.End, in.Content, in.Hash)
 		if err != nil {
 			return nil, editOutput{}, err
 		}

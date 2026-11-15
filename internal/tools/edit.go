@@ -12,8 +12,10 @@ import (
 
 // PerformEdit replaces a line range in a file and reindexes it. The path is
 // resolved against root, matching PerformRead, so a harness that spawns proxer
-// elsewhere still edits the file the agent is looking at.
-func PerformEdit(db *sqlx.DB, root, path string, startLine, endLine int, newContent string) (string, error) {
+// elsewhere still edits the file the agent is looking at. When expectedHash is
+// non-empty it must match the file's current content hash; a mismatch means the
+// file changed after it was read, and the edit is refused.
+func PerformEdit(db *sqlx.DB, root, path string, startLine, endLine int, newContent, expectedHash string) (string, error) {
 	resolved, err := resolvePath(root, path)
 	if err != nil {
 		return "", err
@@ -26,6 +28,12 @@ func PerformEdit(db *sqlx.DB, root, path string, startLine, endLine int, newCont
 	contentBytes, err := os.ReadFile(resolved)
 	if err != nil {
 		return "", fmt.Errorf("failed to read file: %w", err)
+	}
+
+	if expectedHash != "" {
+		if current := contentHash(contentBytes); current != expectedHash {
+			return "", fmt.Errorf("file '%s' changed since it was read. Read it again before editing", path)
+		}
 	}
 
 	lines := strings.Split(string(contentBytes), "\n")

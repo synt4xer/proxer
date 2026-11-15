@@ -113,6 +113,7 @@ func main() {
 
 	var editFilepath string
 	var editStart, editEnd int
+	var editHash string
 	var editCmd = &cobra.Command{
 		Use:   "edit",
 		Short: "Replace specific lines in a file with new content from STDIN",
@@ -127,7 +128,7 @@ func main() {
 				os.Exit(1)
 			}
 
-			resultJSON, err := tools.PerformEdit(db, root, editFilepath, editStart, editEnd, string(newContentBytes))
+			resultJSON, err := tools.PerformEdit(db, root, editFilepath, editStart, editEnd, string(newContentBytes), editHash)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, err.Error())
 				os.Exit(1)
@@ -139,6 +140,7 @@ func main() {
 	editCmd.Flags().IntVarP(&editStart, "start", "s", 1, "Start line to replace")
 	editCmd.Flags().IntVarP(&editEnd, "end", "e", 1, "End line to replace")
 	editCmd.MarkFlagRequired("filepath")
+	editCmd.Flags().StringVar(&editHash, "hash", "", "Hash returned by read; the edit is rejected if the file changed since then")
 
 	rootCmd.AddCommand(indexCmd, searchCmd, readCmd, editCmd, newMCPCommand())
 
