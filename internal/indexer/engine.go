@@ -2,23 +2,16 @@ package indexer
 
 import (
 	"fmt"
-	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/jmoiron/sqlx"
-	"github.com/synt4xer/proxer/internal/config"
 	"github.com/synt4xer/proxer/internal/filesystem"
 
 	_ "modernc.org/sqlite"
 )
-
-const insertChunkSQL = `
-	INSERT INTO chunk_search (id, filepath, start_line, end_line, content)
-	VALUES (?, ?, ?, ?, ?)
-`
 
 // dsn builds the SQLite URI for dbPath. Two settings cannot be expressed by a
 // plain filename: a busy timeout on every connection, and BEGIN IMMEDIATE for
@@ -43,9 +36,11 @@ func dsn(dbPath string) string {
 	return "file:" + escaped + "?" + params.Encode()
 }
 
-// InitDB opens the index database at dbPath and creates the FTS5 table when it
-// is missing. The path is a parameter because the index belongs to a project
-// root, not to whatever directory the process happens to run in.
+// InitDB opens the index database at dbPath and creates the tables when they
+// are missing. The path is a parameter because the index belongs to a project
+// root, not to whatever directory the process happens to run in. A database
+// written by an older schema is emptied here, so nothing that follows has to
+// handle a layout it does not understand.
 func InitDB(dbPath string) (*sqlx.DB, error) {
 	if dir := filepath.Dir(dbPath); dir != "" {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -63,90 +58,36 @@ func InitDB(dbPath string) (*sqlx.DB, error) {
 	// for every statement.
 	db.SetMaxOpenConns(1)
 
-	query := `
-		CREATE VIRTUAL TABLE IF NOT EXISTS chunk_search USING fts5(
-			id UNINDEXED,
-			filepath,
-			start_line UNINDEXED,
-			end_line UNINDEXED,
-			content
-		);
-	`
-	if _, err := db.Exec(query); err != nil {
+	if err := createSchema(db); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("failed to create the index table: %w", err)
+		return nil, err
 	}
 
 	return db, nil
 }
 
-// IndexProject rebuilds the entire index for rootPath. Chunks are keyed by
-// their path inside the project, so indexing an absolute root and indexing a
-// relative one produce the same database.
-func IndexProject(db *sqlx.DB, rootPath string, ignoredDirs []string) error {
-	tx, err := db.Beginx()
+// IndexProject brings the index in line with the tree. It is a delta build:
+// files whose size and modification time still match the manifest are skipped,
+// files whose bytes hash the same are only re-stamped, and rows for paths the
+// walk no longer sees are dropped. A build with nothing to do returns a zero
+// Refreshed and never opens a write transaction, which is what makes it cheap
+// enough to run before a search.
+func IndexProject(db *sqlx.DB, rootPath string, ignoredDirs []string) (Refreshed, error) {
+	diff, err := computeDiff(db, rootPath, ignoredDirs)
 	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	if _, err := tx.Exec("DELETE FROM chunk_search"); err != nil {
-		return fmt.Errorf("failed to clear the index: %w", err)
+		return Refreshed{}, err
 	}
 
-	stmt, err := tx.Preparex(insertChunkSQL)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-
-	walkErr := filepath.WalkDir(rootPath, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-
-		info, err := d.Info()
-		if err != nil {
-			return nil
-		}
-
-		if d.IsDir() {
-			// The root itself is never skipped: an ignored directory name such
-			// as "build" is legitimate when it is the project being indexed.
-			if path != rootPath && !filesystem.IsIndexableDir(path, info, ignoredDirs) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-
-		if !filesystem.IsIndexableFile(info) {
-			return nil
-		}
-
-		// A file that disappears or cannot be read mid-walk is skipped rather
-		// than aborting the whole rebuild.
-		content, err := os.ReadFile(path)
-		if err != nil {
-			return nil
-		}
-
-		rel, err := relativePath(rootPath, path)
-		if err != nil {
-			return err
-		}
-
-		return insertChunks(stmt, rel, string(content))
-	})
-	if walkErr != nil {
-		return walkErr
+	if diff.Empty() {
+		return Refreshed{}, nil
 	}
 
-	return tx.Commit()
+	return applyDiff(db, rootPath, diff)
 }
 
-// ReindexFile replaces the stored chunks of a single file. Editing a file only
-// shifts line numbers inside that file, so every other row in the index stays
-// valid and never has to be rebuilt.
+// ReindexFile replaces the stored chunks and manifest row of a single file.
+// Editing a file only shifts line numbers inside that file, so every other row
+// in the index stays valid and never has to be rebuilt.
 func ReindexFile(db *sqlx.DB, rootPath, path string, ignoredDirs []string) error {
 	rel, err := relativePath(rootPath, path)
 	if err != nil {
@@ -159,21 +100,40 @@ func ReindexFile(db *sqlx.DB, rootPath, path string, ignoredDirs []string) error
 	}
 	defer tx.Rollback()
 
-	if err := deleteChunks(tx, rel); err != nil {
+	writer, err := newChunkWriter(tx)
+	if err != nil {
 		return err
 	}
 
+	if err := reindexFile(tx, writer, rel, path, ignoredDirs); err != nil {
+		writer.Close()
+		return err
+	}
+
+	// The chunk rows and the manifest row must land together: a manifest that
+	// disagrees with the chunks makes the next delta re-read or skip a file
+	// that has not actually moved.
+	if err := writer.Close(); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
+// reindexFile is the body of ReindexFile, split out so every early return still
+// goes through the single commit above.
+func reindexFile(tx *sqlx.Tx, writer *chunkWriter, rel, path string, ignoredDirs []string) error {
 	if filesystem.PathHasIgnoredDir(rel, ignoredDirs) {
 		// The file lives under a directory the project ignores, so editing it
 		// directly must not smuggle it back into the index.
-		return tx.Commit()
+		return removeFile(tx, rel)
 	}
 
 	content, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// The file is gone, so dropping its chunks is the whole job.
-			return tx.Commit()
+			// The file is gone, so dropping its rows is the whole job.
+			return removeFile(tx, rel)
 		}
 		return fmt.Errorf("failed to read %s: %w", rel, err)
 	}
@@ -185,60 +145,17 @@ func ReindexFile(db *sqlx.DB, rootPath, path string, ignoredDirs []string) error
 	if !filesystem.IsIndexableFile(info) {
 		// The file grew past the size limit or lost an indexable extension:
 		// it must no longer be reachable through search.
-		return tx.Commit()
+		return removeFile(tx, rel)
 	}
 
-	stmt, err := tx.Preparex(insertChunkSQL)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-
-	if err := insertChunks(stmt, rel, string(content)); err != nil {
-		return err
+	entry := fileMeta{
+		rel:     rel,
+		size:    info.Size(),
+		mtimeNS: info.ModTime().UnixNano(),
+		hash:    ContentHash(content),
 	}
 
-	return tx.Commit()
-}
-
-// deleteChunks drops every row stored under rel. FTS5 tables have no secondary
-// indexes, so the delete scans the table, which is still far cheaper than
-// rebuilding the whole project.
-func deleteChunks(tx *sqlx.Tx, rel string) error {
-	if _, err := tx.Exec("DELETE FROM chunk_search WHERE filepath = ?", rel); err != nil {
-		return fmt.Errorf("failed to drop stale chunks for %s: %w", rel, err)
-	}
-	return nil
-}
-
-// insertChunks splits content into overlapping windows and stores each window
-// under rel. Callers produce rel once so every path in the index has the same
-// shape regardless of how the root was supplied.
-func insertChunks(stmt *sqlx.Stmt, rel, content string) error {
-	lines := strings.Split(content, "\n")
-	totalLines := len(lines)
-	step := config.ChunkSize - config.OverlapSize
-
-	for i := 0; i < totalLines; i += step {
-		startLine := i + 1
-		endLine := i + config.ChunkSize
-		if endLine > totalLines {
-			endLine = totalLines
-		}
-
-		chunkContent := strings.Join(lines[startLine-1:endLine], "\n")
-		id := fmt.Sprintf("%s:%d-%d", rel, startLine, endLine)
-
-		if _, err := stmt.Exec(id, rel, startLine, endLine, chunkContent); err != nil {
-			return fmt.Errorf("failed to store chunk %s: %w", id, err)
-		}
-
-		if endLine >= totalLines {
-			break
-		}
-	}
-
-	return nil
+	return storeFile(tx, writer, entry, string(content), true)
 }
 
 // relativePath keys a file by its location inside the project. Absolute keys

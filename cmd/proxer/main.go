@@ -65,15 +65,20 @@ func main() {
 		Use:   "index",
 		Short: "Scan and index the local directory",
 		Run: func(cmd *cobra.Command, args []string) {
-			if err := indexer.IndexProject(db, root, ignoredDirs); err != nil {
+			refreshed, err := indexer.IndexProject(db, root, ignoredDirs)
+			if err != nil {
 				fmt.Fprintf(os.Stderr, "Indexing failed: %v\n", err)
 				os.Exit(1)
 			}
-			fmt.Println(`{"status": "indexed_successfully"}`)
+			fmt.Printf(
+				`{"status": "indexed_successfully", "refreshed": {"added": %d, "changed": %d, "removed": %d}}`+"\n",
+				refreshed.Added, refreshed.Changed, refreshed.Removed,
+			)
 		},
 	}
 
 	var keyword string
+	var noRefresh bool
 	var searchCmd = &cobra.Command{
 		Use:   "search",
 		Short: "Search codebase using keyword",
@@ -83,7 +88,10 @@ func main() {
 				os.Exit(1)
 			}
 
-			resultJSON, err := tools.PerformSearch(db, root, keyword)
+			resultJSON, err := tools.PerformSearch(db, root, keyword, tools.SearchOptions{
+				NoRefresh:   noRefresh || config.RefreshDisabled(),
+				IgnoredDirs: ignoredDirs,
+			})
 			if err != nil {
 				fmt.Fprintln(os.Stderr, err.Error())
 				os.Exit(1)
@@ -92,6 +100,7 @@ func main() {
 		},
 	}
 	searchCmd.Flags().StringVarP(&keyword, "keyword", "k", "", "Keyword for FTS5 search (required)")
+	searchCmd.Flags().BoolVar(&noRefresh, "no-refresh", false, "Query the index as it stands instead of bringing it up to date first (also PROXER_NO_REFRESH=1)")
 	searchCmd.MarkFlagRequired("keyword")
 
 	var filepathFlag string

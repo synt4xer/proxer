@@ -41,7 +41,7 @@ func TestIndexerEngine(t *testing.T) {
 	require.NoError(t, db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='chunk_search'").Scan(&tableName))
 	assert.Equal(t, "chunk_search", tableName)
 
-	require.NoError(t, indexer.IndexProject(db, root, config.DefaultIgnoredDirs), "IndexProject should complete without errors")
+	mustIndex(t, db, root, config.DefaultIgnoredDirs)
 
 	var count int
 	require.NoError(t, db.QueryRow("SELECT COUNT(*) FROM chunk_search").Scan(&count))
@@ -69,7 +69,7 @@ func TestIndexProjectStoresIdenticalPathsForAbsoluteAndRelativeRoots(t *testing.
 		db, err := indexer.InitDB(filepath.Join(root, config.DBFile))
 		require.NoError(t, err)
 
-		require.NoError(t, indexer.IndexProject(db, candidate, config.DefaultIgnoredDirs))
+		mustIndex(t, db, candidate, config.DefaultIgnoredDirs)
 
 		var rows []string
 		require.NoError(t, db.Select(&rows, "SELECT filepath FROM chunk_search ORDER BY filepath"))
@@ -93,7 +93,7 @@ func TestIndexProjectHandlesIgnoredDirectoryAsRoot(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	require.NoError(t, indexer.IndexProject(db, root, config.DefaultIgnoredDirs))
+	mustIndex(t, db, root, config.DefaultIgnoredDirs)
 
 	var count int
 	require.NoError(t, db.QueryRow("SELECT COUNT(*) FROM chunk_search").Scan(&count))
@@ -110,7 +110,7 @@ func TestIndexProjectHonorsAProjectSkipList(t *testing.T) {
 	defer db.Close()
 
 	ignored := append(append([]string{}, config.DefaultIgnoredDirs...), "generated")
-	require.NoError(t, indexer.IndexProject(db, root, ignored))
+	mustIndex(t, db, root, ignored)
 
 	var count int
 	require.NoError(t, db.QueryRow("SELECT COUNT(*) FROM chunk_search WHERE filepath LIKE 'generated/%'").Scan(&count))

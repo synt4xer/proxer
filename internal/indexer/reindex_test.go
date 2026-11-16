@@ -50,7 +50,7 @@ func TestReindexFileReplacesOnlyTheEditedFile(t *testing.T) {
 	require.NoError(t, os.WriteFile(untouched, []byte("func Untouched() {}\n"), 0o644))
 
 	db := openWorkspaceDB(t, root)
-	require.NoError(t, indexer.IndexProject(db, root, config.DefaultIgnoredDirs))
+	mustIndex(t, db, root, config.DefaultIgnoredDirs)
 	require.Equal(t, 1, countChunks(t, db, "edited.go"))
 
 	// The edit both replaces the old marker and grows the file across a chunk
@@ -79,7 +79,7 @@ func TestReindexFileDropsChunksOfDeletedFile(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte("func Gone() {}\n"), 0o644))
 
 	db := openWorkspaceDB(t, root)
-	require.NoError(t, indexer.IndexProject(db, root, config.DefaultIgnoredDirs))
+	mustIndex(t, db, root, config.DefaultIgnoredDirs)
 	require.Equal(t, 1, countChunks(t, db, "gone.go"))
 
 	require.NoError(t, os.Remove(path))
@@ -95,7 +95,7 @@ func TestReindexFileKeysChunksByProjectPath(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte("func First() {}\n"), 0o644))
 
 	db := openWorkspaceDB(t, root)
-	require.NoError(t, indexer.IndexProject(db, root, config.DefaultIgnoredDirs))
+	mustIndex(t, db, root, config.DefaultIgnoredDirs)
 
 	require.NoError(t, os.WriteFile(path, []byte("func Second() {}\n"), 0o644))
 
@@ -176,7 +176,7 @@ func TestReindexFileDropsChunksOfAnIgnoredDirectory(t *testing.T) {
 	db := openWorkspaceDB(t, root)
 	ignored := append(append([]string{}, config.DefaultIgnoredDirs...), "generated")
 	// Seed the row a previous build without the skip list would have left.
-	require.NoError(t, indexer.IndexProject(db, root, config.DefaultIgnoredDirs))
+	mustIndex(t, db, root, config.DefaultIgnoredDirs)
 	require.Equal(t, 1, countChunks(t, db, "generated/gen.go"))
 
 	require.NoError(t, indexer.ReindexFile(db, root, path, ignored))

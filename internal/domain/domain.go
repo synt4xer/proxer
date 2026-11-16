@@ -7,6 +7,25 @@ type SearchResultDB struct {
 	Snippet   string `db:"snippet"`
 }
 
+// RefreshSummary reports what the pre-search refresh changed. It is omitted when
+// the caller asked for no refresh, because "zero changes" and "not checked" are
+// different answers and only one of them is a claim about the index.
+type RefreshSummary struct {
+	Added   int `json:"added"`
+	Changed int `json:"changed"`
+	Removed int `json:"removed"`
+}
+
+// SearchResponse is the envelope around a result set. The index metadata leads
+// so a caller sees whether the answer came from the tree it is looking at before
+// it reads the results.
+type SearchResponse struct {
+	Root      string             `json:"root"`
+	IndexedAt string             `json:"indexed_at,omitempty"`
+	Refreshed *RefreshSummary    `json:"refreshed,omitempty"`
+	Results   []SearchResultJSON `json:"results"`
+}
+
 type SearchResultJSON struct {
 	Root     string `json:"root"`
 	Filepath string `json:"filepath"`

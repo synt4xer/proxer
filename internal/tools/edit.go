@@ -33,7 +33,7 @@ func PerformEdit(db *sqlx.DB, root, path string, startLine, endLine int, newCont
 	}
 
 	if expectedHash != "" {
-		if current := contentHash(contentBytes); current != expectedHash {
+		if current := indexer.ContentHash(contentBytes); current != expectedHash {
 			return "", fmt.Errorf("file '%s' changed since it was read. Read it again before editing", path)
 		}
 	}
