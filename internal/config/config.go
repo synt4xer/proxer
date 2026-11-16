@@ -85,6 +85,23 @@ var DefaultIgnoredDirs = []string{
 	".astro",
 }
 
+// NoRefreshEnvVar names the environment variable that keeps `search` read-only.
+// A harness that mounts the project read-only, or one that deliberately wants
+// to query a pinned snapshot, sets it instead of passing a flag it cannot pass
+// through the MCP server.
+const NoRefreshEnvVar = "PROXER_NO_REFRESH"
+
+// RefreshDisabled reports whether the environment turns the pre-search refresh
+// off. Only an explicit truthy value counts, so an unrelated "0" or "false" in
+// the environment cannot silently disable freshness.
+func RefreshDisabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(NoRefreshEnvVar))) {
+	case "", "0", "false", "no":
+		return false
+	}
+	return true
+}
+
 // ConfigFile is the optional per-project configuration read from the project
 // root.
 const ConfigFile = ".proxer.json"

@@ -91,11 +91,14 @@ func TestServerWorkflow(t *testing.T) {
 
 	searchRes := callTool(t, cs, "search", map[string]any{"keyword": "ProcessData"})
 	require.False(t, searchRes.IsError)
-	var found []domain.SearchResultJSON
+	var found domain.SearchResponse
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, searchRes)), &found))
-	require.Len(t, found, 1)
-	assert.Equal(t, "main.go", found[0].Filepath)
-	assert.Equal(t, root, found[0].Root)
+	require.Len(t, found.Results, 1)
+	assert.Equal(t, "main.go", found.Results[0].Filepath)
+	assert.Equal(t, root, found.Results[0].Root)
+	assert.NotEmpty(t, found.IndexedAt, "search must report when the index last moved")
+	require.NotNil(t, found.Refreshed)
+	assert.Zero(t, found.Refreshed.Added, "index ran first, so the search refresh must find nothing to do")
 
 	readRes := callTool(t, cs, "read", map[string]any{"filepath": "main.go"})
 	require.False(t, readRes.IsError)
@@ -151,7 +154,12 @@ func TestServerReturnsNoMatchesWithoutError(t *testing.T) {
 
 	res := callTool(t, cs, "search", map[string]any{"keyword": "no-such-identifier"})
 	require.False(t, res.IsError)
-	assert.Equal(t, "[]", resultText(t, res))
+
+	var response domain.SearchResponse
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &response))
+	assert.Empty(t, response.Results)
+	require.NotNil(t, response.Refreshed)
+	assert.Equal(t, 1, response.Refreshed.Added, "a missing database must be built, never reported as an empty answer")
 }
 
 func TestServerIndexHonorsTheProjectSkipList(t *testing.T) {
@@ -165,5 +173,9 @@ func TestServerIndexHonorsTheProjectSkipList(t *testing.T) {
 
 	res := callTool(t, cs, "search", map[string]any{"keyword": "GeneratedMarker"})
 	require.False(t, res.IsError)
-	assert.Equal(t, "[]", resultText(t, res), "the index tool must honor the skip list the server was built with")
+
+	var response domain.SearchResponse
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &response))
+	assert.Empty(t, response.Results, "the index must honor the skip list the server was built with")
+	assert.Zero(t, response.Refreshed.Added, "a file inside an ignored directory must not be picked up by the refresh")
 }

@@ -7,6 +7,7 @@ import (
 
 	"github.com/jmoiron/sqlx"
 	"github.com/synt4xer/proxer/internal/domain"
+	"github.com/synt4xer/proxer/internal/indexer"
 )
 
 // buildMatchQuery converts free-form agent input into a valid FTS5 expression.
@@ -31,10 +32,46 @@ func buildMatchQuery(keyword string) (string, bool) {
 	return strings.Join(quoted, " OR "), true
 }
 
-func PerformSearch(db *sqlx.DB, root, keyword string) (string, error) {
+// SearchOptions carries the two things PerformSearch needs besides the query.
+// NoRefresh is opt-out rather than opt-in so the zero value does the safe
+// thing: the index is brought up to date, and a caller that must not write asks
+// for that explicitly.
+type SearchOptions struct {
+	NoRefresh   bool
+	IgnoredDirs []string
+}
+
+// PerformSearch answers a keyword query from the index. Unless the caller opts
+// out, it first brings the index in line with the tree, because a harness tool
+// that wrote a file is otherwise invisible to proxer and the stale answer is
+// indistinguishable from "no match".
+func PerformSearch(db *sqlx.DB, root, keyword string, opts SearchOptions) (string, error) {
+	response := domain.SearchResponse{
+		Root:    root,
+		Results: make([]domain.SearchResultJSON, 0),
+	}
+
+	if !opts.NoRefresh {
+		refreshed, err := indexer.IndexProject(db, root, opts.IgnoredDirs)
+		if err != nil {
+			return "", fmt.Errorf("failed to refresh the index: %w", err)
+		}
+		response.Refreshed = &domain.RefreshSummary{
+			Added:   refreshed.Added,
+			Changed: refreshed.Changed,
+			Removed: refreshed.Removed,
+		}
+	}
+
+	indexedAt, err := indexer.IndexedAt(db)
+	if err != nil {
+		return "", fmt.Errorf("failed to read the index timestamp: %w", err)
+	}
+	response.IndexedAt = indexedAt
+
 	matchQuery, ok := buildMatchQuery(keyword)
 	if !ok {
-		return "[]", nil
+		return encodeJSON(response)
 	}
 
 	query := `
@@ -45,18 +82,12 @@ func PerformSearch(db *sqlx.DB, root, keyword string) (string, error) {
 	`
 
 	var dbResults []domain.SearchResultDB
-	err := db.Select(&dbResults, query, matchQuery)
-	if err != nil {
+	if err := db.Select(&dbResults, query, matchQuery); err != nil {
 		return "", fmt.Errorf("SQLite query error: %w", err)
 	}
 
-	if len(dbResults) == 0 {
-		return "[]", nil
-	}
-
-	var jsonResults []domain.SearchResultJSON
 	for _, r := range dbResults {
-		jsonResults = append(jsonResults, domain.SearchResultJSON{
+		response.Results = append(response.Results, domain.SearchResultJSON{
 			Root:     root,
 			Filepath: r.Filepath,
 			Line:     fmt.Sprintf("%d-%d", r.StartLine, r.EndLine),
@@ -64,7 +95,7 @@ func PerformSearch(db *sqlx.DB, root, keyword string) (string, error) {
 		})
 	}
 
-	out, err := encodeJSON(jsonResults)
+	out, err := encodeJSON(response)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal JSON: %w", err)
 	}
