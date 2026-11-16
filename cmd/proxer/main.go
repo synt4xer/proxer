@@ -8,6 +8,7 @@ import (
 
 	"github.com/jmoiron/sqlx"
 	"github.com/spf13/cobra"
+	"github.com/synt4xer/proxer/database"
 	"github.com/synt4xer/proxer/internal/config"
 	"github.com/synt4xer/proxer/internal/indexer"
 	"github.com/synt4xer/proxer/internal/tools"
@@ -47,7 +48,7 @@ func main() {
 				return
 			}
 
-			db, err = indexer.InitDB(filepath.Join(root, config.DBFile))
+			db, err = database.Open(filepath.Join(root, config.DBFile), indexer.Chunking())
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Failed to initialize DB: %v\n", err)
 				os.Exit(1)

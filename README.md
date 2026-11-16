@@ -56,10 +56,11 @@ The database lives at `<root>/.proxer.db`, and every path in it is keyed relativ
 
 ```
 cmd/proxer/          CLI entry point (Cobra)
+database/            SQLite store: connection, schema, chunk rows, file manifest
 internal/domain/     Result models
 internal/config/     Indexing limits and allowlists
 internal/filesystem/ Indexability predicates
-internal/indexer/    SQLite FTS5 store and chunking
+internal/indexer/    Delta build, chunk windows, and single-file reindex
 internal/mcpserver/  MCP stdio server exposing the operations as tools
 internal/tools/      Search, read, and edit operations
 skills/proxer/       Agent Skill package (installed into the target project)

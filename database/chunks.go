@@ -1,11 +1,10 @@
-package indexer
+package database
 
 import (
 	"fmt"
 	"strings"
 
 	"github.com/jmoiron/sqlx"
-	"github.com/synt4xer/proxer/internal/config"
 )
 
 const insertChunkSQL = `
@@ -25,17 +24,19 @@ const upsertManifestSQL = `
 		hash = excluded.hash
 `
 
-// chunkWriter owns the prepared statements a chunk insert needs. A project
-// rebuild writes thousands of chunks, so re-preparing the pair for every file
-// would dominate the cost of the build itself.
-type chunkWriter struct {
+// Writer owns one transaction and the prepared statements a chunk insert
+// needs. A project rebuild writes thousands of chunks, so re-preparing the
+// statements for every file would dominate the cost of the build itself.
+type Writer struct {
+	tx       *sqlx.Tx
+	chunking Chunking
 	insert   *sqlx.Stmt
 	mapping  *sqlx.Stmt
 	manifest *sqlx.Stmt
 }
 
-func newChunkWriter(tx *sqlx.Tx) (*chunkWriter, error) {
-	writer := &chunkWriter{}
+func NewWriter(tx *sqlx.Tx, chunking Chunking) (*Writer, error) {
+	writer := &Writer{tx: tx, chunking: chunking}
 	statements := []struct {
 		query string
 		dest  **sqlx.Stmt
@@ -57,7 +58,7 @@ func newChunkWriter(tx *sqlx.Tx) (*chunkWriter, error) {
 	return writer, nil
 }
 
-func (w *chunkWriter) Close() error {
+func (w *Writer) Close() error {
 	var err error
 	for _, statement := range []*sqlx.Stmt{w.insert, w.mapping, w.manifest} {
 		if statement == nil {
@@ -70,17 +71,45 @@ func (w *chunkWriter) Close() error {
 	return err
 }
 
+// Store replaces the rows stored for rec.Path with chunks of content and then
+// records the manifest row, so the two records cannot drift apart. A file that
+// was not in the manifest has no rows to drop, which is why the caller passes
+// replace only when it might.
+func (w *Writer) Store(rec FileRecord, content string, replace bool) error {
+	if replace {
+		if err := deleteChunks(w.tx, rec.Path); err != nil {
+			return err
+		}
+	}
+	if err := w.write(rec.Path, content); err != nil {
+		return err
+	}
+	return w.StoreManifest(rec)
+}
+
+// StoreManifest records a file whose bytes are already indexed, which is all a
+// file needs when only its timestamp moved.
+func (w *Writer) StoreManifest(rec FileRecord) error {
+	if _, err := w.manifest.Exec(rec.Path, rec.Size, rec.MTimeNS, rec.Hash); err != nil {
+		return fmt.Errorf("failed to record %s in the manifest: %w", rec.Path, err)
+	}
+	return nil
+}
+
 // write splits content into overlapping windows and stores each window under
 // rel, recording the rowid of every inserted row in index_chunks. The map is
 // what makes a later delete proportional to the file instead of the project.
-func (w *chunkWriter) write(rel, content string) error {
+func (w *Writer) write(rel, content string) error {
 	lines := strings.Split(content, "\n")
 	totalLines := len(lines)
-	step := config.ChunkSize - config.OverlapSize
+	step := w.chunking.Size - w.chunking.Overlap
+	if step <= 0 {
+		return fmt.Errorf("chunk size %d must exceed overlap %d", w.chunking.Size, w.chunking.Overlap)
+	}
 
 	for i := 0; i < totalLines; i += step {
 		startLine := i + 1
-		endLine := i + config.ChunkSize
+		endLine := i + w.chunking.Size
 		if endLine > totalLines {
 			endLine = totalLines
 		}
@@ -125,43 +154,5 @@ func deleteChunks(tx *sqlx.Tx, rel string) error {
 		return fmt.Errorf("failed to drop the chunk map for %s: %w", rel, err)
 	}
 
-	return nil
-}
-
-// removeFile drops a file from both the chunks and the manifest. A path the
-// caller stopped seeing must not survive in either store, or the next delta
-// would treat the leftover chunks as current.
-func removeFile(tx *sqlx.Tx, rel string) error {
-	if err := deleteChunks(tx, rel); err != nil {
-		return err
-	}
-
-	if _, err := tx.Exec("DELETE FROM indexed_files WHERE filepath = ?", rel); err != nil {
-		return fmt.Errorf("failed to drop the manifest row for %s: %w", rel, err)
-	}
-
-	return nil
-}
-
-// storeFile records the chunks and the manifest row of one file inside the
-// caller's transaction, so the two records cannot drift apart. A file that was
-// not in the manifest has no rows to drop, which is why the caller passes
-// replace only when it might.
-func storeFile(tx *sqlx.Tx, writer *chunkWriter, entry fileMeta, content string, replace bool) error {
-	if replace {
-		if err := deleteChunks(tx, entry.rel); err != nil {
-			return err
-		}
-	}
-	if err := writer.write(entry.rel, content); err != nil {
-		return err
-	}
-	return upsertManifest(writer, entry)
-}
-
-func upsertManifest(writer *chunkWriter, entry fileMeta) error {
-	if _, err := writer.manifest.Exec(entry.rel, entry.size, entry.mtimeNS, entry.hash); err != nil {
-		return fmt.Errorf("failed to record %s in the manifest: %w", entry.rel, err)
-	}
 	return nil
 }
