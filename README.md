@@ -2,7 +2,7 @@
 
 **Proxer** is a code search, read, and edit tool for AI coding agents. It keeps a SQLite FTS5 index of a project in `.proxer.db`, so an agent can find code by keyword, read the exact line range it needs, and replace that range without rewriting the whole file.
 
-Current release: [`v0.4.0`](https://github.com/synt4xer/proxer/releases/tag/v0.4.0). The upgrade notes for a project that already ran an older Proxer are in [Upgrading from v0.3.0](#upgrading-from-v030). Every tag is listed in [`CHANGELOG.md`](CHANGELOG.md).
+Current release: [`v0.4.0`](https://github.com/synt4xer/proxer/releases/tag/v0.4.0). The upgrade notes for a project that already ran an older Proxer are in [Upgrading from v0.3.0](#upgrading-from-v030).
 
 ## Why Proxer
 
@@ -67,7 +67,6 @@ internal/mcpserver/  MCP stdio server exposing the operations as tools
 internal/tools/      Search, read, and edit operations
 skills/proxer/       Agent Skill package (installed into the target project)
 docs/                Harness integration guide
-CHANGELOG.md         What each release contains
 ```
 
 ## Compilation and Installation
