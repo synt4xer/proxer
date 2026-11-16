@@ -2,28 +2,30 @@
 
 **Proxer** is a code search, read, and edit tool for AI coding agents. It keeps a SQLite FTS5 index of a project in `.proxer.db`, so an agent can find code by keyword, read the exact line range it needs, and replace that range without rewriting the whole file.
 
+Current release: [`v0.4.0`](https://github.com/synt4xer/proxer/releases/tag/v0.4.0). The upgrade notes for a project that already ran an older Proxer are in [Upgrading from v0.3.0](#upgrading-from-v030).
+
 ## Why Proxer
 
-An agent's context window is the scarce resource, and a raw scan spends it on every matching line. On the benchmark below, `rg` printed 15.4 MB over 116,001 lines for the token `func` on a 2,000-file tree, and 61.7 MB over 464,001 lines on an 8,000-file tree. The same query through Proxer returned 894 B at either size.
+An agent's context window is the scarce resource, and a raw scan spends it on every matching line. On the benchmark below, `rg` printed 7.3 MB over 60,000 lines for the token `func` on a 2,000-file tree, and 29.2 MB over 240,000 lines on an 8,000-file tree. The same query through Proxer returned about 1 KB at either size.
 
 Proxer returns at most five 60-line chunks, each with a 15-line overlap, so a hit arrives with enough surrounding code to act on and can be passed straight to `read` and `edit`. The index keeps search fast as the tree grows, but the bounded payload is the reason to use it in an agent loop.
 
-| Workload | 2,000 files (16 MB) | 8,000 files (63 MB) |
+| Workload | 2,000 files (17 MB) | 8,000 files (68 MB) |
 | --- | --- | --- |
-| `search` payload for `func` | 894 B | 894 B |
-| `rg` payload for `func` | 15.4 MB / 116k lines | 61.7 MB / 464k lines |
-| `search` for a rare token, refreshed | 27.7 ms | 70.6 ms |
-| `search` for a rare token, `--no-refresh` | 14.5 ms | 17.9 ms |
-| `search` for `func`, refreshed | 37.0 ms | 110.9 ms |
-| `search` for `func`, `--no-refresh` | 23.7 ms | 57.4 ms |
-| `index`, first build | 626 ms | 2.77 s |
-| `index`, nothing changed | 25 ms | 65 ms |
-| `index`, 1,000 files changed | — | 557 ms |
-| `edit` (reindex the edited file) | 19 ms | 19 ms |
+| `search` payload for `func` | 1.0 KB | 1.0 KB |
+| `rg` payload for `func` | 7.3 MB / 60k lines | 29.2 MB / 240k lines |
+| `search` for a token that never appears, refreshed | 16.8 ms | 38.6 ms |
+| `search` for the same token, `--no-refresh` | 8.7 ms | 8.9 ms |
+| `search` for `func`, refreshed | 27.8 ms | 81.9 ms |
+| `search` for `func`, `--no-refresh` | 20.8 ms | 55.2 ms |
+| `index`, first build | 433 ms | 2.00 s |
+| `index`, nothing changed | 16.6 ms | 35.6 ms |
+| `index`, 1,000 files changed | 544 ms | 717 ms |
+| `edit` (reindex the edited file) | 15 ms | 15 ms |
 
-Method: an Apple-silicon Mac with a warm cache over synthetic Go trees (2,000 files / 16 MB and 8,000 files / 63 MB, 16,100 chunks). Each number is the median of five `proxer` runs, process start included. `rg` is ripgrep 15.2.0 given an explicit path and default output.
+Method: an Apple-silicon Mac with a warm cache over generated Go trees (2,000 files / 17 MB and 8,000 files / 68 MB, which chunk into about 8,000 and 32,000 rows). Each number is the median of seven `proxer` runs, process start included, and each changed-file run writes its files immediately before the timed build so the diff it claims to measure is really there. `rg` is ripgrep 15.2.0 given an explicit path and default output.
 
-`index` is a delta build. The first build reads and hashes every file and writes the chunk map; a build with nothing to do is a stat-only walk; a changed file costs 0.49 ms to re-chunk at 16,000 chunks, so the 1,000-file pull finishes in half a second. `search` refreshes the index before it queries unless `--no-refresh` is passed, which is why the refreshed and unrefreshed rows differ. `edit` reindexes only the file it changed.
+`index` is a delta build. The first build reads and hashes every file and writes the chunk map; a build with nothing to do is a stat-only walk; a changed file costs about 0.7 ms to re-read and re-chunk at 32,000 chunks, so the 1,000-file pull finishes in roughly two thirds of a second. `search` refreshes the index before it queries unless `--no-refresh` is passed, which is why the refreshed and unrefreshed rows differ. `edit` reindexes only the file it changed.
 
 `search` returns an envelope: `{root, indexed_at, refreshed, results}`, where each entry of `results` is `{root, filepath, line, snippet}`. The agent feeds the line range to `read`, gets back a `hash`, and passes it to `edit` so a change in between refuses the overwrite.
 
@@ -44,7 +46,7 @@ The database lives at `<root>/.proxer.db`, and every path in it is keyed relativ
 ## Key Features
 
 - **FTS5 smart chunking:** Proxer splits code into 60-line chunks with a 15-line overlap, so a match keeps its surrounding context without spending the agent's token budget on whole files.
-- **Fresh by default:** `search` walks the tree before it queries and rewrites only the files whose size, timestamp, or hash moved, so changes made by `git pull` or another tool are found without a manual `index`. A refresh with nothing to do opens no write transaction and costs a 40 ms walk on 8,000 files.
+- **Fresh by default:** `search` walks the tree before it queries, re-reads only the files whose size or timestamp moved, re-chunks only the ones whose content actually changed, and drops the rows of files that are gone. Changes written by `git pull` or another tool are found without a manual `index`. A refresh with nothing to do opens no write transaction and costs a 36 ms walk on 8,000 files.
 - **Autonomous edit and targeted reindex:** When an agent edits a file, Proxer saves the change and reindexes **only that file**. The rest of the index stays valid, so the edit cost tracks the file rather than the project size (see [Why Proxer](#why-proxer)).
 - **Explicit project root:** `--root`, `PROXER_ROOT`, or the working directory, in that order. The index never depends on where the process happened to start.
 - **Prefix search:** Every search term is matched as a token prefix, so `auth` reaches `AuthMiddleware` without the agent guessing full identifiers.
@@ -101,6 +103,24 @@ Add the index to the target project's `.gitignore`:
 .proxer.db-shm
 .proxer.db-wal
 ```
+
+### Upgrading from v0.3.0
+
+Two things change under an existing project, and both are handled without manual steps:
+
+- **The database is rebuilt once.** v0.4.0 stamps the schema version, the chunk window, and a per-file manifest into `.proxer.db`; a database without that stamp is cleared and reindexed on the next command instead of being extended with rows it cannot account for. The first `search` after the upgrade pays for the full build (about 2 s at 8,000 files), and every later one is a delta.
+- **`search` output is an envelope.** A script that parsed the top-level array must read `results` instead:
+
+```json
+{
+  "root": "/home/dev/code/my-awesome-project",
+  "indexed_at": "2026-11-16T04:55:12.917786Z",
+  "refreshed": {"added": 0, "changed": 0, "removed": 0},
+  "results": [{"root": "...", "filepath": "...", "line": "136-181", "snippet": "...<b>hit</b>..."}]
+}
+```
+
+`index` still prints `{"status": "indexed_successfully", "refreshed": {...}}`, and `read` and `edit` are unchanged.
 
 ## Command Reference
 
@@ -203,7 +223,7 @@ Which one to pick:
 
 - **Project-local skill (default).** `make install DEST=/path/to/project` puts the package inside the project, with its own binary and its own `.proxer.db`. Choose this when an agent works on one project at a time and you want the version pinned there.
 - **Global skill.** `make install DEST=$HOME` installs the same package at `~/.agents/skills/proxer`, so several projects share one binary. The database is still per project, so pass `--root` or set `PROXER_ROOT`. Choose this when you drive many repositories and do not want a copy in each.
-- **MCP server.** `proxer mcp` publishes the four tools as `mcp__proxer__<tool>`. Tool arguments avoid shell quoting, and `edit` takes the replacement as an argument instead of stdin. Choose this when the harness speaks MCP and you want the tools in the model's tool list.
+- **MCP server.** `proxer mcp` publishes the four tools as `mcp__proxer__<tool>`. Tool arguments avoid shell quoting, and `edit` takes the replacement as an argument instead of stdin. The server's `search` refreshes the index just like the CLI; set `PROXER_NO_REFRESH=1` in its environment to make every search a pure read. Choose this when the harness speaks MCP and you want the tools in the model's tool list.
 
 Start with the project-local skill. Add the MCP server when the harness supports it, and reach for the global skill only when per-project copies become a burden.
 
@@ -213,7 +233,7 @@ Setup for both, including a worked project-scoped MCP config, lives in [docs/INT
 
 - **Scope.** Every path must stay inside the root. `read` and `edit` reject `../` and absolute paths that point at another project, because no index entry exists outside the root. Use the harness `read` or `bash` for those files.
 - **Fresh to a gate, not to a proof.** `search` refreshes by comparing size and modification time, and only reads a file whose stat moved. A same-size write inside the same timestamp tick is therefore skipped until something else changes the file. The hash catches every case where the gate opens; it is not computed on every walk.
-- **Refresh costs a walk.** Every `search` stats the tree, about 40 ms at 8,000 files, and takes the write lock only when something changed. `--no-refresh` avoids both.
+- **Refresh costs a walk.** Every `search` stats the tree, about 36 ms at 8,000 files, and takes the write lock only when something changed. `--no-refresh` avoids both.
 - **Text matching only.** Search matches token prefixes. CamelCase is not split, so `middleware` will not find `AuthMiddleware` while `auth` will. There are no regular expressions or globs.
 - **Capped result set.** `search` returns at most five chunks ordered by rank, so a broad query is truncated rather than complete. Treat a search as a starting point.
 - **Indexed extensions only.** Files outside the known source and document extensions are not searchable. Editing one works, but the change will not appear in `search`.
