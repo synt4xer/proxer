@@ -28,7 +28,7 @@ Each command prints JSON on stdout. Failures print to stderr and exit non-zero, 
 If the harness has a `proxer` MCP server connected, prefer its tools over the shell binary. They return the same JSON without shell quoting, and `edit` takes the replacement as an argument instead of stdin. The tools are named `mcp__proxer__<tool>`:
 
 - `mcp__proxer__index` — no arguments.
-- `mcp__proxer__search` — `{"keyword": "..."}`.
+- `mcp__proxer__search` — `{"keyword": "..."}`. Refreshes the index first, like the CLI.
 - `mcp__proxer__read` — `{"filepath": "...", "start": 40, "end": 70}`; `start` defaults to 1 and `end` to 60. Returns the file `hash`.
 - `mcp__proxer__edit` — `{"filepath": "...", "start": 52, "end": 58, "content": "...", "hash": "..."}`; `hash` is the value from the read, and a mismatch rejects the edit.
 
@@ -38,10 +38,9 @@ Use the shell binary when no MCP server is connected, when you need `--root` for
 
 ## Workflow
 
-1. Run `index` once before the first search in a session.
-2. `search` to find where something lives.
-3. `read` that line range for full context.
-4. `edit` the range with the `hash` from the read; the index updates itself.
+1. `search` to find where something lives. It refreshes the index first, so a database that does not exist yet is built and files written by other tools are found.
+2. `read` that line range for full context.
+3. `edit` the range with the `hash` from the read; the index updates itself.
 
 ## index
 
@@ -49,9 +48,9 @@ Use the shell binary when no MCP server is connected, when you need `--root` for
 ./.agents/skills/proxer/scripts/proxer index
 ```
 
-Rebuilds `.proxer.db` from the project tree. It skips `node_modules`, `dist`, `.next`, `.agents`, and other dependency or build directories. A project can add to that list with a `.proxer.json` at its root, e.g. `{"ignored_dirs": ["third_party", "generated"]}`: names match whole directory names at any depth and add to the defaults, and a malformed file aborts the command. Indexed files are known source and document extensions (`.go`, `.ts`, `.py`, `.rs`, `.md`, `.json`, `.yaml`, `.sql`, `.sh`, and similar), plus exact names such as `Dockerfile`, `Makefile`, and `go.mod`, up to 1 MB each.
+Brings `.proxer.db` in line with the project tree and prints the counts it touched: `{"status": "indexed_successfully", "refreshed": {"added": 0, "changed": 0, "removed": 0}}`. The build is incremental, so a run with nothing to do is a stat-only walk that prints three zeros. `search` does the same work before every query, so this command is optional.
 
-The index is a snapshot. Re-run `index` after `git checkout`, `git pull`, or any change made outside of `proxer edit`.
+It skips `node_modules`, `dist`, `.next`, `.agents`, and other dependency or build directories. A project can add to that list with a `.proxer.json` at its root, e.g. `{"ignored_dirs": ["third_party", "generated"]}`: names match whole directory names at any depth and add to the defaults, and a malformed file aborts the command. Indexed files are known source and document extensions (`.go`, `.ts`, `.py`, `.rs`, `.md`, `.json`, `.yaml`, `.sql`, `.sh`, and similar), plus exact names such as `Dockerfile`, `Makefile`, and `go.mod`, up to 1 MB each.
 
 ## search
 
@@ -59,7 +58,20 @@ The index is a snapshot. Re-run `index` after `git checkout`, `git pull`, or any
 ./.agents/skills/proxer/scripts/proxer search -k "authMiddleware"
 ```
 
-Returns a JSON array of at most 5 matches, each with `root` (the absolute path of the indexed project), `filepath`, `line` (`"start-end"`), and `snippet` with `<b>` around the matched text.
+Returns an envelope:
+
+```json
+{
+  "root": "...",
+  "indexed_at": "2026-11-16T03:38:29.543151Z",
+  "refreshed": {"added": 1, "changed": 0, "removed": 0},
+  "results": [{"root": "...", "filepath": "...", "line": "40-99", "snippet": "...<b>hit</b>..."}]
+}
+```
+
+`results` holds at most 5 matches: `root` is the absolute path of the indexed project, `line` is `"start-end"`, and `snippet` wraps the matched text in `<b>`. `indexed_at` is when the index last changed. `refreshed` counts what this call added, changed, and removed; all zero means the index was already current.
+
+Add `--no-refresh` (or set `PROXER_NO_REFRESH=1`) to query the index as it stands. Then `refreshed` is absent and a file changed since the last build stays invisible, which is only what you want for a pinned snapshot or a read-only mount.
 
 How matching behaves:
 
@@ -105,6 +117,7 @@ The replacement does not need to match the length of the range. The whole range 
 - Files outside the indexed extensions are not searchable. Editing one works, but the change will not appear in `search`.
 - Directories on the project skip list (`.proxer.json`) are not indexed, and `edit` on a file inside one will not re-add it to the index.
 - `.proxer.db` belongs in the target project's `.gitignore`.
+- Freshness is gated on size and modification time: a same-size write inside the same timestamp tick is not noticed until the file changes again. Everything the gate opens is confirmed by a content hash before it is re-chunked.
 - Creating and deleting files is out of scope: `edit` only rewrites an existing line range.
 - Concurrent writers queue instead of failing, but two processes editing the same file still leave only the last write. `edit` never leaves a half-written file; it does not merge concurrent changes. Pass the `hash` from `read` to catch a writer that changed the file and refuse the edit.
 - `search` never uses regular expressions or file globs. Use `read` on a known path when you need exact text.
