@@ -155,10 +155,13 @@ func reset(db *sqlx.DB, chunking Chunking) error {
 		}
 	}
 
+	// indexed_at is cleared with the rows it described: a timestamp from a
+	// database that was just emptied would claim an index that does not exist.
 	for key, value := range map[string]string{
 		metaSchemaVersion: SchemaVersion,
 		metaChunkSize:     strconv.Itoa(chunking.Size),
 		metaOverlapSize:   strconv.Itoa(chunking.Overlap),
+		metaIndexedAt:     "",
 	} {
 		if err := setMeta(tx, key, value); err != nil {
 			return err
