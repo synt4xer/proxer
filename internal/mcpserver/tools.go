@@ -14,7 +14,8 @@ import (
 type indexInput struct{}
 
 type indexOutput struct {
-	Status string `json:"status" jsonschema:"human-readable result of the index run"`
+	Status    string                `json:"status" jsonschema:"human-readable result of the index run"`
+	Refreshed domain.RefreshSummary `json:"refreshed" jsonschema:"files added, changed, and removed by this run; all zero when the index was already current"`
 }
 
 type searchInput struct {
@@ -50,14 +51,23 @@ func (s *Server) registerTools() {
 func (s *Server) addIndexTool() {
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name: "index",
-		Description: "Scan the project root and rebuild the full-text index from scratch. " +
-			"Run this once after checkout and again after changes made outside proxer; it replaces the existing index. " +
+		Description: "Scan the project root and bring the full-text index up to date. " +
+			"It is incremental: only new, changed, and deleted files are touched, so running it is cheap. " +
+			"search does this automatically, so the tool exists for callers that want to pay the cost up front. " +
 			"No parameters are needed: the root is fixed when the server starts.",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, _ indexInput) (*mcp.CallToolResult, indexOutput, error) {
-		if err := indexer.IndexProject(s.db, s.root, s.ignoredDirs); err != nil {
+		refreshed, err := indexer.IndexProject(s.db, s.root, s.ignoredDirs)
+		if err != nil {
 			return nil, indexOutput{}, err
 		}
-		return nil, indexOutput{Status: "indexed_successfully"}, nil
+		return nil, indexOutput{
+			Status: "indexed_successfully",
+			Refreshed: domain.RefreshSummary{
+				Added:   refreshed.Added,
+				Changed: refreshed.Changed,
+				Removed: refreshed.Removed,
+			},
+		}, nil
 	})
 }
 
@@ -66,22 +76,27 @@ func (s *Server) addSearchTool() {
 		Name: "search",
 		Description: "Search the full-text index. Every term matches as a token prefix and multiple terms are OR-ed. " +
 			"camelCase is not split, so 'auth' reaches 'AuthMiddleware' but 'middleware' does not. " +
-			"Returns up to 5 matches, each with the absolute project root, a filepath relative to that root, a line range, " +
-			"and a snippet where matches are wrapped in <b> tags. Empty or punctuation-only input returns no matches.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in searchInput) (*mcp.CallToolResult, []domain.SearchResultJSON, error) {
-		resultJSON, err := tools.PerformSearch(s.db, s.root, in.Keyword)
+			"Before querying it brings the index up to date, so files changed by other tools are found without calling index first. " +
+			"Returns the absolute project root, the indexed_at timestamp of the last index change, the refreshed counts for this call, " +
+			"and up to 5 results, each with a filepath relative to that root, a line range, and a snippet where matches are wrapped in <b> tags. " +
+			"Empty or punctuation-only input returns no matches.",
+	}, func(_ context.Context, _ *mcp.CallToolRequest, in searchInput) (*mcp.CallToolResult, domain.SearchResponse, error) {
+		resultJSON, err := tools.PerformSearch(s.db, s.root, in.Keyword, tools.SearchOptions{
+			NoRefresh:   s.noRefresh,
+			IgnoredDirs: s.ignoredDirs,
+		})
 		if err != nil {
-			return nil, nil, err
+			return nil, domain.SearchResponse{}, err
 		}
 
-		var results []domain.SearchResultJSON
-		if err := json.Unmarshal([]byte(resultJSON), &results); err != nil {
-			return nil, nil, fmt.Errorf("decode search result: %w", err)
+		var response domain.SearchResponse
+		if err := json.Unmarshal([]byte(resultJSON), &response); err != nil {
+			return nil, domain.SearchResponse{}, fmt.Errorf("decode search result: %w", err)
 		}
-		if results == nil {
-			results = []domain.SearchResultJSON{}
+		if response.Results == nil {
+			response.Results = []domain.SearchResultJSON{}
 		}
-		return nil, results, nil
+		return nil, response, nil
 	})
 }
 

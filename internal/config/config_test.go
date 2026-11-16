@@ -93,3 +93,27 @@ func TestResolveRootExpandsHome(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, expected, actual)
 }
+
+func TestRefreshDisabled(t *testing.T) {
+	tests := []struct {
+		value string
+		want  bool
+	}{
+		{"", false},
+		{"0", false},
+		{"false", false},
+		{"no", false},
+		{"1", true},
+		{"true", true},
+		{"TRUE", true},
+		{"yes", true},
+		{"anything-else", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.value, func(t *testing.T) {
+			t.Setenv(config.NoRefreshEnvVar, tt.value)
+			assert.Equal(t, tt.want, config.RefreshDisabled())
+		})
+	}
+}

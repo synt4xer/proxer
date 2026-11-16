@@ -38,7 +38,7 @@ func newToolWorkspace(t *testing.T) (string, *sqlx.DB) {
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 
-	require.NoError(t, indexer.IndexProject(db, root, config.DefaultIgnoredDirs))
+	mustIndex(t, db, root, config.DefaultIgnoredDirs)
 	return root, db
 }
 
@@ -46,31 +46,26 @@ func TestToolsSuite(t *testing.T) {
 	root, db := newToolWorkspace(t)
 
 	t.Run("PerformSearch", func(t *testing.T) {
-		resultJSON, err := tools.PerformSearch(db, root, "ProcessData")
-		require.NoError(t, err)
-		assert.Contains(t, resultJSON, "main.go")
-		assert.Contains(t, resultJSON, "ProcessData")
+		response := searchAll(t, db, root, "ProcessData")
+		require.NotEmpty(t, response.Results)
+		assert.Equal(t, root, response.Root, "a search must name the index it came from")
+		assert.Equal(t, root, response.Results[0].Root, "each match must name the index it came from")
+		assert.Equal(t, "main.go", response.Results[0].Filepath)
 
-		var results []domain.SearchResultJSON
-		require.NoError(t, json.Unmarshal([]byte(resultJSON), &results))
-		require.NotEmpty(t, results)
-		assert.Equal(t, root, results[0].Root, "each match must name the index it came from")
-
-		emptyJSON, err := tools.PerformSearch(db, root, "NonExistentKeyword")
-		require.NoError(t, err)
-		assert.Equal(t, "[]", emptyJSON)
+		empty := searchAll(t, db, root, "NonExistentKeyword")
+		assert.Empty(t, empty.Results, "a term with no matches must return an empty result list")
+		assert.NotNil(t, empty.Refreshed, "a default search must say what it refreshed")
 	})
 
 	t.Run("PerformSearchSanitizesInput", func(t *testing.T) {
 		// Raw FTS5 syntax must never reach the parser as an error.
 		for _, keyword := range []string{"ProcessData(", "AND", "*", `"quoted`, "middleware?"} {
-			_, err := tools.PerformSearch(db, root, keyword)
+			_, err := tools.PerformSearch(db, root, keyword, toolSearchOptions)
 			require.NoError(t, err, "keyword %q produced an error", keyword)
 		}
 
-		resultJSON, err := tools.PerformSearch(db, root, "()*&^%")
-		require.NoError(t, err)
-		assert.Equal(t, "[]", resultJSON)
+		punctuation := searchAll(t, db, root, "()*&^%")
+		assert.Empty(t, punctuation.Results, "punctuation-only input must not reach the parser")
 	})
 
 	t.Run("PerformRead", func(t *testing.T) {
@@ -178,13 +173,11 @@ func TestToolsSuite(t *testing.T) {
 		assert.Contains(t, updatedContent, "Data Processed Successfully")
 		assert.NotContains(t, updatedContent, "We need to change this logic later")
 
-		searchResult, err := tools.PerformSearch(db, root, "Successfully")
-		require.NoError(t, err)
+		searchResult := searchJSON(t, db, root, "Successfully")
 		assert.Contains(t, searchResult, "main.go", "auto-reindex failed to register new content")
 
 		// The stale line must be gone from the index too, not only from disk.
-		staleResult, err := tools.PerformSearch(db, root, "Processing")
-		require.NoError(t, err)
+		staleResult := searchJSON(t, db, root, "Processing")
 		assert.NotContains(t, staleResult, "We need to change this logic later")
 	})
 
@@ -265,11 +258,10 @@ func TestJSONOutputIsNotHTMLEscaped(t *testing.T) {
 
 	page := filepath.Join(root, "page.html")
 	require.NoError(t, os.WriteFile(page, []byte("<div>a & b</div>\n"), 0o644))
-	require.NoError(t, indexer.IndexProject(db, root, config.DefaultIgnoredDirs))
+	mustIndex(t, db, root, config.DefaultIgnoredDirs)
 
 	t.Run("searchKeepsSnippetTagsLiteral", func(t *testing.T) {
-		resultJSON, err := tools.PerformSearch(db, root, "ProcessData")
-		require.NoError(t, err)
+		resultJSON := searchJSON(t, db, root, "ProcessData")
 		assert.Contains(t, resultJSON, "<b>ProcessData</b>")
 		assert.NotContains(t, resultJSON, `\u003c`)
 	})
@@ -331,4 +323,79 @@ func TestWriteFileAtomicallyKeepsTheContract(t *testing.T) {
 		require.NoError(t, err)
 		assert.Contains(t, string(updated), "var a = 2")
 	})
+}
+
+// toolSearchOptions is the default a harness gets: refresh on, project skip
+// list in force.
+var toolSearchOptions = tools.SearchOptions{IgnoredDirs: config.DefaultIgnoredDirs}
+
+func searchJSON(t *testing.T, db *sqlx.DB, root, keyword string) string {
+	t.Helper()
+
+	resultJSON, err := tools.PerformSearch(db, root, keyword, toolSearchOptions)
+	require.NoError(t, err)
+	return resultJSON
+}
+
+func searchAll(t *testing.T, db *sqlx.DB, root, keyword string) domain.SearchResponse {
+	t.Helper()
+
+	var response domain.SearchResponse
+	require.NoError(t, json.Unmarshal([]byte(searchJSON(t, db, root, keyword)), &response))
+	return response
+}
+
+// mustIndex runs a delta build and fails the test if it errors. The build is
+// incremental now, so most call sites only care that it succeeded.
+func mustIndex(t *testing.T, db *sqlx.DB, rootPath string, ignoredDirs []string) indexer.Refreshed {
+	t.Helper()
+
+	refreshed, err := indexer.IndexProject(db, rootPath, ignoredDirs)
+	require.NoError(t, err)
+	return refreshed
+}
+
+// TestSearchRefreshesTheIndex covers the defect the field report found: a file
+// written by a harness tool, not by proxer edit, used to stay invisible until
+// someone remembered to run index.
+func TestSearchRefreshesTheIndex(t *testing.T) {
+	root, db := newToolWorkspace(t)
+
+	outside := filepath.Join(root, "outside.go")
+	require.NoError(t, os.WriteFile(outside, []byte("func WrittenByAnotherTool() {}\n"), 0o644))
+
+	response := searchAll(t, db, root, "WrittenByAnotherTool")
+	require.Len(t, response.Results, 1, "search must find a file written since the last index")
+	assert.NotEmpty(t, response.IndexedAt)
+	require.NotNil(t, response.Refreshed)
+	assert.Equal(t, 1, response.Refreshed.Added)
+
+	require.NoError(t, os.Remove(outside))
+
+	afterDelete := searchAll(t, db, root, "WrittenByAnotherTool")
+	assert.Empty(t, afterDelete.Results, "search must stop returning a file that was deleted")
+	require.NotNil(t, afterDelete.Refreshed)
+	assert.Equal(t, 1, afterDelete.Refreshed.Removed)
+}
+
+// TestSearchWithoutRefreshTrustsTheIndex pins the opt-out. A caller that asked
+// for a pure read gets exactly the stored index, and the response says nothing
+// about a refresh rather than claiming there was nothing to do.
+func TestSearchWithoutRefreshTrustsTheIndex(t *testing.T) {
+	root, db := newToolWorkspace(t)
+
+	outside := filepath.Join(root, "outside.go")
+	require.NoError(t, os.WriteFile(outside, []byte("func WrittenByAnotherTool() {}\n"), 0o644))
+
+	opts := tools.SearchOptions{NoRefresh: true, IgnoredDirs: config.DefaultIgnoredDirs}
+	resultJSON, err := tools.PerformSearch(db, root, "WrittenByAnotherTool", opts)
+	require.NoError(t, err)
+
+	var response domain.SearchResponse
+	require.NoError(t, json.Unmarshal([]byte(resultJSON), &response))
+	assert.Empty(t, response.Results, "without a refresh the new file must stay invisible")
+	assert.Nil(t, response.Refreshed, "no refresh must be reported as not attempted, not as zero changes")
+
+	refreshed := searchAll(t, db, root, "WrittenByAnotherTool")
+	assert.Len(t, refreshed.Results, 1, "the same query with a refresh must find it")
 }

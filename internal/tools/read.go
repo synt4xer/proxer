@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/synt4xer/proxer/internal/domain"
+	"github.com/synt4xer/proxer/internal/indexer"
 )
 
 // PerformRead returns the requested line range of a file. The path is resolved
@@ -50,7 +51,7 @@ func PerformRead(root, path string, startLine, endLine int) (string, error) {
 		Root:     root,
 		Filepath: path,
 		Content:  contentBuilder.String(),
-		Hash:     contentHash(data),
+		Hash:     indexer.ContentHash(data),
 	}
 
 	out, err := encodeJSON(result)
