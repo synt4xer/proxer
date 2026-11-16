@@ -11,6 +11,7 @@ import (
 	"github.com/jmoiron/sqlx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/synt4xer/proxer/database"
 	"github.com/synt4xer/proxer/internal/config"
 	"github.com/synt4xer/proxer/internal/indexer"
 )
@@ -18,7 +19,7 @@ import (
 func openWorkspaceDB(t *testing.T, root string) *sqlx.DB {
 	t.Helper()
 
-	db, err := indexer.InitDB(filepath.Join(root, config.DBFile))
+	db, err := database.Open(filepath.Join(root, config.DBFile), indexer.Chunking())
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 
@@ -133,7 +134,7 @@ func TestReindexFileWaitsForConcurrentWriters(t *testing.T) {
 	dbPath := filepath.Join(root, config.DBFile)
 
 	first := openWorkspaceDB(t, root)
-	second, err := indexer.InitDB(dbPath)
+	second, err := database.Open(dbPath, indexer.Chunking())
 	require.NoError(t, err)
 	t.Cleanup(func() { second.Close() })
 

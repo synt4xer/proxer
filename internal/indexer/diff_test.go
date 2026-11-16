@@ -9,6 +9,7 @@ import (
 	"github.com/jmoiron/sqlx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/synt4xer/proxer/database"
 	"github.com/synt4xer/proxer/internal/config"
 	"github.com/synt4xer/proxer/internal/indexer"
 )
@@ -164,7 +165,7 @@ func TestNoChangeRefreshTakesNoWriteLock(t *testing.T) {
 	write(t, filepath.Join(root, "main.go"), "func Main() {}\n")
 	mustIndex(t, reader, root, ignored)
 
-	writer, err := indexer.InitDB(dbPath)
+	writer, err := database.Open(dbPath, indexer.Chunking())
 	require.NoError(t, err)
 	t.Cleanup(func() { writer.Close() })
 
@@ -211,7 +212,7 @@ func TestLegacyDatabaseIsRebuiltOnce(t *testing.T) {
 
 	var version string
 	require.NoError(t, db.Get(&version, "SELECT value FROM meta WHERE key = 'schema_version'"))
-	assert.Equal(t, indexer.SchemaVersion, version)
+	assert.Equal(t, database.SchemaVersion, version)
 
 	refreshed := mustIndex(t, db, root, config.DefaultIgnoredDirs)
 	assert.Equal(t, indexer.Refreshed{Added: 1}, refreshed, "the rebuild must come from the tree")

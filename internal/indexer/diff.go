@@ -6,9 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"time"
 
 	"github.com/jmoiron/sqlx"
+	"github.com/synt4xer/proxer/database"
 	"github.com/synt4xer/proxer/internal/config"
 	"github.com/synt4xer/proxer/internal/filesystem"
 )
@@ -25,24 +25,14 @@ func (r Refreshed) Empty() bool {
 	return r.Added == 0 && r.Changed == 0 && r.Removed == 0
 }
 
-// fileMeta is what the manifest remembers about one file: the cheap gate that
-// decides whether the file has to be read at all, and the content hash that
-// decides whether it has to be re-chunked once it has been read.
-type fileMeta struct {
-	rel     string
-	size    int64
-	mtimeNS int64
-	hash    string
-}
-
 // Diff is the work one delta build has to apply. The four buckets are disjoint:
 // a file whose size and mtime are unchanged is in none of them, a file whose
 // bytes are provably identical is Touched and only its manifest row is
 // refreshed, and a file whose hash moved is Changed and gets re-chunked.
 type Diff struct {
-	Added   []fileMeta
-	Changed []fileMeta
-	Touched []fileMeta
+	Added   []database.FileRecord
+	Changed []database.FileRecord
+	Touched []database.FileRecord
 	Removed []string
 }
 
@@ -50,39 +40,12 @@ func (d *Diff) Empty() bool {
 	return len(d.Added) == 0 && len(d.Changed) == 0 && len(d.Touched) == 0 && len(d.Removed) == 0
 }
 
-// loadManifest reads the whole manifest into memory. Every walk needs it, and
-// one row per file is small next to the chunks it describes.
-func loadManifest(db *sqlx.DB) (map[string]fileMeta, error) {
-	type manifestRow struct {
-		Filepath string `db:"filepath"`
-		Size     int64  `db:"size"`
-		MtimeNS  int64  `db:"mtime_ns"`
-		Hash     string `db:"hash"`
-	}
-
-	var rows []manifestRow
-	if err := db.Select(&rows, "SELECT filepath, size, mtime_ns, hash FROM indexed_files"); err != nil {
-		return nil, fmt.Errorf("failed to read the index manifest: %w", err)
-	}
-
-	manifest := make(map[string]fileMeta, len(rows))
-	for _, row := range rows {
-		manifest[row.Filepath] = fileMeta{
-			rel:     row.Filepath,
-			size:    row.Size,
-			mtimeNS: row.MtimeNS,
-			hash:    row.Hash,
-		}
-	}
-	return manifest, nil
-}
-
 // computeDiff walks the tree without opening a write transaction and compares
 // what it finds with the manifest. Reading and hashing happen here, before the
 // lock is taken, so a file that turns out to be unchanged costs a stat and
 // nothing else.
 func computeDiff(db *sqlx.DB, rootPath string, ignoredDirs []string) (*Diff, error) {
-	manifest, err := loadManifest(db)
+	manifest, err := database.Files(db)
 	if err != nil {
 		return nil, err
 	}
@@ -117,12 +80,12 @@ func computeDiff(db *sqlx.DB, rootPath string, ignoredDirs []string) (*Diff, err
 			return err
 		}
 
-		current := fileMeta{rel: rel, size: info.Size(), mtimeNS: info.ModTime().UnixNano()}
+		current := database.FileRecord{Path: rel, Size: info.Size(), MTimeNS: info.ModTime().UnixNano()}
 
 		stored, known := manifest[rel]
 		delete(manifest, rel)
 
-		if known && stored.size == current.size && stored.mtimeNS == current.mtimeNS {
+		if known && stored.Size == current.Size && stored.MTimeNS == current.MTimeNS {
 			// The cheap gate says the file has not moved since it was indexed.
 			return nil
 		}
@@ -139,7 +102,7 @@ func computeDiff(db *sqlx.DB, rootPath string, ignoredDirs []string) (*Diff, err
 			if os.IsNotExist(err) {
 				// The file disappeared mid-walk; treating it as a change lets
 				// the delta drop rows that describe something no longer there.
-				current.hash = stored.hash
+				current.Hash = stored.Hash
 				diff.Changed = append(diff.Changed, current)
 				return nil
 			}
@@ -148,8 +111,8 @@ func computeDiff(db *sqlx.DB, rootPath string, ignoredDirs []string) (*Diff, err
 			return fmt.Errorf("failed to read %s: %w", rel, err)
 		}
 
-		current.hash = ContentHash(content)
-		if current.hash == stored.hash {
+		current.Hash = ContentHash(content)
+		if current.Hash == stored.Hash {
 			// Same bytes, new timestamp: only the manifest needs updating.
 			diff.Touched = append(diff.Touched, current)
 			return nil
@@ -166,9 +129,9 @@ func computeDiff(db *sqlx.DB, rootPath string, ignoredDirs []string) (*Diff, err
 		diff.Removed = append(diff.Removed, rel)
 	}
 
-	sort.Slice(diff.Added, func(i, j int) bool { return diff.Added[i].rel < diff.Added[j].rel })
-	sort.Slice(diff.Changed, func(i, j int) bool { return diff.Changed[i].rel < diff.Changed[j].rel })
-	sort.Slice(diff.Touched, func(i, j int) bool { return diff.Touched[i].rel < diff.Touched[j].rel })
+	sort.Slice(diff.Added, func(i, j int) bool { return diff.Added[i].Path < diff.Added[j].Path })
+	sort.Slice(diff.Changed, func(i, j int) bool { return diff.Changed[i].Path < diff.Changed[j].Path })
+	sort.Slice(diff.Touched, func(i, j int) bool { return diff.Touched[i].Path < diff.Touched[j].Path })
 	sort.Strings(diff.Removed)
 
 	return diff, nil
@@ -184,7 +147,7 @@ func applyDiff(db *sqlx.DB, rootPath string, diff *Diff) (Refreshed, error) {
 	}
 	defer tx.Rollback()
 
-	writer, err := newChunkWriter(tx)
+	writer, err := database.NewWriter(tx, Chunking())
 	if err != nil {
 		return Refreshed{}, err
 	}
@@ -192,7 +155,7 @@ func applyDiff(db *sqlx.DB, rootPath string, diff *Diff) (Refreshed, error) {
 	var refreshed Refreshed
 
 	for _, rel := range diff.Removed {
-		if err := removeFile(tx, rel); err != nil {
+		if err := database.Remove(tx, rel); err != nil {
 			writer.Close()
 			return Refreshed{}, err
 		}
@@ -200,7 +163,7 @@ func applyDiff(db *sqlx.DB, rootPath string, diff *Diff) (Refreshed, error) {
 	}
 
 	for _, entry := range diff.Touched {
-		if err := upsertManifest(writer, entry); err != nil {
+		if err := writer.StoreManifest(entry); err != nil {
 			writer.Close()
 			return Refreshed{}, err
 		}
@@ -225,7 +188,7 @@ func applyDiff(db *sqlx.DB, rootPath string, diff *Diff) (Refreshed, error) {
 		refreshed.Changed++
 	}
 
-	if err := setMeta(tx, metaIndexedAt, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+	if err := database.StampIndexedAt(tx); err != nil {
 		writer.Close()
 		return Refreshed{}, err
 	}
@@ -247,25 +210,25 @@ func applyDiff(db *sqlx.DB, rootPath string, diff *Diff) (Refreshed, error) {
 // that lands between the walk and this read leaves the row slightly behind, so
 // the next build re-reads the file and finds the same hash; that costs one read
 // and never produces a wrong answer.
-func storeCurrentFile(tx *sqlx.Tx, writer *chunkWriter, rootPath string, entry fileMeta, replace bool) error {
-	path := filepath.Join(rootPath, filepath.FromSlash(entry.rel))
+func storeCurrentFile(tx *sqlx.Tx, writer *database.Writer, rootPath string, entry database.FileRecord, replace bool) error {
+	path := filepath.Join(rootPath, filepath.FromSlash(entry.Path))
 
 	content, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			// Removed between the walk and the write: dropping it is the
 			// truthful outcome, and it keeps the manifest and chunks aligned.
-			return removeFile(tx, entry.rel)
+			return database.Remove(tx, entry.Path)
 		}
-		return fmt.Errorf("failed to read %s: %w", entry.rel, err)
+		return fmt.Errorf("failed to read %s: %w", entry.Path, err)
 	}
 
 	if int64(len(content)) > config.MaxFileSize {
-		return removeFile(tx, entry.rel)
+		return database.Remove(tx, entry.Path)
 	}
 
-	entry.size = int64(len(content))
-	entry.hash = ContentHash(content)
+	entry.Size = int64(len(content))
+	entry.Hash = ContentHash(content)
 
-	return storeFile(tx, writer, entry, string(content), replace)
+	return writer.Store(entry, string(content), replace)
 }

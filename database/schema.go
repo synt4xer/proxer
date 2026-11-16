@@ -1,20 +1,14 @@
-package indexer
+package database
 
 import (
 	"database/sql"
 	"errors"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/jmoiron/sqlx"
-	"github.com/synt4xer/proxer/internal/config"
 )
-
-// SchemaVersion identifies the on-disk layout. Bump it whenever the tables, the
-// chunker, or the meaning of a stored row changes: a database stamped with
-// another value is cleared and rebuilt from the tree, which is cheaper and
-// safer than migrating rows whose provenance is unknown.
-const SchemaVersion = "1"
 
 const (
 	metaSchemaVersion = "schema_version"
@@ -59,8 +53,8 @@ var schemaStatements = []string{
 	);`,
 }
 
-// getter is satisfied by both *sqlx.DB and *sqlx.Tx, so the meta and manifest
-// helpers work inside and outside a transaction without a wrapper type.
+// getter is satisfied by both *sqlx.DB and *sqlx.Tx, so the meta helpers work
+// inside and outside a transaction without a wrapper type.
 type getter interface {
 	Get(dest any, query string, args ...any) error
 }
@@ -99,12 +93,19 @@ func IndexedAt(db *sqlx.DB) (string, error) {
 	return metaValue(db, metaIndexedAt)
 }
 
-// createSchema creates every table the index needs and, when the database was
-// built by a different binary, empties it so the next build starts from the
-// tree. A pre-manifest database has chunks but no rowid map and no manifest:
-// running a delta against it would re-insert rows without dropping the old
-// ones, so wiping is the only correct starting point.
-func createSchema(db *sqlx.DB) error {
+// StampIndexedAt records that the index changed at this moment, inside the
+// caller's transaction so the timestamp cannot describe a write that rolled
+// back.
+func StampIndexedAt(tx *sqlx.Tx) error {
+	return setMeta(tx, metaIndexedAt, time.Now().UTC().Format(time.RFC3339Nano))
+}
+
+// migrate creates every table the index needs and, when the database was built
+// by a different binary, empties it so the next build starts from the tree. A
+// pre-manifest database has chunks but no rowid map and no manifest: running a
+// delta against it would re-insert rows without dropping the old ones, so
+// wiping is the only correct starting point.
+func migrate(db *sqlx.DB, chunking Chunking) error {
 	for _, statement := range schemaStatements {
 		if _, err := db.Exec(statement); err != nil {
 			return fmt.Errorf("failed to create the index tables: %w", err)
@@ -125,19 +126,19 @@ func createSchema(db *sqlx.DB) error {
 	}
 
 	current := version == SchemaVersion &&
-		chunkSize == strconv.Itoa(config.ChunkSize) &&
-		overlap == strconv.Itoa(config.OverlapSize)
+		chunkSize == strconv.Itoa(chunking.Size) &&
+		overlap == strconv.Itoa(chunking.Overlap)
 	if current {
 		return nil
 	}
 
-	return resetIndex(db)
+	return reset(db, chunking)
 }
 
-// resetIndex drops every stored row and stamps the current schema. The wipe and
-// the stamp share a transaction, so an interrupted reset cannot leave a
-// half-cleared index that claims to be current.
-func resetIndex(db *sqlx.DB) error {
+// reset drops every stored row and stamps the current schema. The wipe and the
+// stamp share a transaction, so an interrupted reset cannot leave a half-cleared
+// index that claims to be current.
+func reset(db *sqlx.DB, chunking Chunking) error {
 	tx, err := db.Beginx()
 	if err != nil {
 		return err
@@ -156,8 +157,8 @@ func resetIndex(db *sqlx.DB) error {
 
 	for key, value := range map[string]string{
 		metaSchemaVersion: SchemaVersion,
-		metaChunkSize:     strconv.Itoa(config.ChunkSize),
-		metaOverlapSize:   strconv.Itoa(config.OverlapSize),
+		metaChunkSize:     strconv.Itoa(chunking.Size),
+		metaOverlapSize:   strconv.Itoa(chunking.Overlap),
 	} {
 		if err := setMeta(tx, key, value); err != nil {
 			return err

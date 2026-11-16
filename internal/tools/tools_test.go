@@ -10,6 +10,7 @@ import (
 	"github.com/jmoiron/sqlx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/synt4xer/proxer/database"
 	"github.com/synt4xer/proxer/internal/config"
 	"github.com/synt4xer/proxer/internal/domain"
 	"github.com/synt4xer/proxer/internal/indexer"
@@ -34,7 +35,7 @@ func newToolWorkspace(t *testing.T) (string, *sqlx.DB) {
 	root := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(root, "main.go"), []byte(mockCode), 0o644))
 
-	db, err := indexer.InitDB(filepath.Join(root, config.DBFile))
+	db, err := database.Open(filepath.Join(root, config.DBFile), indexer.Chunking())
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 
