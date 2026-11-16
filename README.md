@@ -4,22 +4,28 @@
 
 ## Why Proxer
 
-An agent's context window is the scarce resource, and a raw scan spends it on every matching line. On the benchmark below, `rg` printed 10.8 MB over 156,001 lines for the token `func` on a 2,000-file tree, and 43.9 MB over 624,001 lines on an 8,000-file tree. The same query through Proxer returned 846 B and 831 B.
+An agent's context window is the scarce resource, and a raw scan spends it on every matching line. On the benchmark below, `rg` printed 15.4 MB over 116,001 lines for the token `func` on a 2,000-file tree, and 61.7 MB over 464,001 lines on an 8,000-file tree. The same query through Proxer returned 894 B at either size.
 
 Proxer returns at most five 60-line chunks, each with a 15-line overlap, so a hit arrives with enough surrounding code to act on and can be passed straight to `read` and `edit`. The index keeps search fast as the tree grows, but the bounded payload is the reason to use it in an agent loop.
 
-| Workload | 2,000 files (160k lines) | 8,000 files (640k lines) |
+| Workload | 2,000 files (16 MB) | 8,000 files (63 MB) |
 | --- | --- | --- |
-| `search` payload for `func` | 846 B | 831 B |
-| `rg` payload for `func` | 10.8 MB / 156k lines | 43.9 MB / 624k lines |
-| `search` for a rare token | 7.9 ms | 9.4 ms |
-| `rg` for the same token | 22 ms | 70 ms |
-| `index` (once per session) | 278 ms | 1.39 s |
-| `edit` (reindex the edited file) | 20 ms | 37 ms |
+| `search` payload for `func` | 894 B | 894 B |
+| `rg` payload for `func` | 15.4 MB / 116k lines | 61.7 MB / 464k lines |
+| `search` for a rare token, refreshed | 27.7 ms | 70.6 ms |
+| `search` for a rare token, `--no-refresh` | 14.5 ms | 17.9 ms |
+| `search` for `func`, refreshed | 37.0 ms | 110.9 ms |
+| `search` for `func`, `--no-refresh` | 23.7 ms | 57.4 ms |
+| `index`, first build | 626 ms | 2.77 s |
+| `index`, nothing changed | 25 ms | 65 ms |
+| `index`, 1,000 files changed | — | 557 ms |
+| `edit` (reindex the edited file) | 19 ms | 19 ms |
 
-Method: an Apple-silicon Mac with a warm cache over synthetic Go trees. `rg` is ripgrep 15.2.0 given an explicit path and default output. `index` fills the database once, `edit` reindexes only the file it changed, and `search` returns at most five 60-line chunks. The index cost is one-time and proportional to the tree; the edit cost tracks the edited file, not the project.
+Method: an Apple-silicon Mac with a warm cache over synthetic Go trees (2,000 files / 16 MB and 8,000 files / 63 MB, 16,100 chunks). Each number is the median of five `proxer` runs, process start included. `rg` is ripgrep 15.2.0 given an explicit path and default output.
 
-Each `search` entry is `{root, filepath, line, snippet}`. The agent feeds the line range to `read`, gets back a `hash`, and passes it to `edit` so a change in between refuses the overwrite.
+`index` is a delta build. The first build reads and hashes every file and writes the chunk map; a build with nothing to do is a stat-only walk; a changed file costs 0.49 ms to re-chunk at 16,000 chunks, so the 1,000-file pull finishes in half a second. `search` refreshes the index before it queries unless `--no-refresh` is passed, which is why the refreshed and unrefreshed rows differ. `edit` reindexes only the file it changed.
+
+`search` returns an envelope: `{root, indexed_at, refreshed, results}`, where each entry of `results` is `{root, filepath, line, snippet}`. The agent feeds the line range to `read`, gets back a `hash`, and passes it to `edit` so a change in between refuses the overwrite.
 
 Proxer is text search, not semantic analysis. It does not resolve types, definitions, or references; that is what a language server (`gopls`, `tsserver`, `rust-analyzer`) is for. Use Proxer to locate and change text, and the language server to reason about the program. They complement each other.
 
@@ -38,6 +44,7 @@ The database lives at `<root>/.proxer.db`, and every path in it is keyed relativ
 ## Key Features
 
 - **FTS5 smart chunking:** Proxer splits code into 60-line chunks with a 15-line overlap, so a match keeps its surrounding context without spending the agent's token budget on whole files.
+- **Fresh by default:** `search` walks the tree before it queries and rewrites only the files whose size, timestamp, or hash moved, so changes made by `git pull` or another tool are found without a manual `index`. A refresh with nothing to do opens no write transaction and costs a 40 ms walk on 8,000 files.
 - **Autonomous edit and targeted reindex:** When an agent edits a file, Proxer saves the change and reindexes **only that file**. The rest of the index stays valid, so the edit cost tracks the file rather than the project size (see [Why Proxer](#why-proxer)).
 - **Explicit project root:** `--root`, `PROXER_ROOT`, or the working directory, in that order. The index never depends on where the process happened to start.
 - **Prefix search:** Every search term is matched as a token prefix, so `auth` reaches `AuthMiddleware` without the agent guessing full identifiers.
@@ -100,8 +107,8 @@ Results are printed as JSON on stdout; failures go to stderr with a non-zero exi
 
 | Command | Purpose |
 | --- | --- |
-| `index` | Rebuild `.proxer.db` from the project tree. |
-| `search -k <keyword>` | Return up to 5 matching chunks with `root`, `filepath`, `line`, and `snippet`. |
+| `index` | Bring `.proxer.db` in line with the project tree, touching only new, changed, and deleted files. |
+| `search -k <keyword> [--no-refresh]` | Refresh the index, then return up to 5 matching chunks inside `{root, indexed_at, refreshed, results}`. |
 | `read -f <file> -s <start> -e <end>` | Return `root`, `filepath`, the inclusive line range, and the file `hash` as JSON. |
 | `edit -f <file> -s <start> -e <end> [--hash <hash>]` | Replace the range with stdin content, then reindex that file. |
 | `mcp` | Serve all four operations as MCP tools over stdio. |
@@ -116,7 +123,7 @@ Drop a `.proxer.json` in the project root to add directories to the skip list:
 }
 ```
 
-Names match whole directory names at any depth and are added to the built-in defaults, which stay in force. A malformed file aborts the command with a non-zero exit code instead of silently indexing directories the project excluded. Changing the list takes effect on the next `index`; `edit` will not re-add a file under an ignored directory to the index.
+Names match whole directory names at any depth and are added to the built-in defaults, which stay in force. A malformed file aborts the command with a non-zero exit code instead of silently indexing directories the project excluded. The skip list is read on every command, so a change takes effect on the next `search` refresh or `index`; `edit` will not re-add a file under an ignored directory to the index.
 
 ### Initialize
 
@@ -124,7 +131,7 @@ Names match whole directory names at any depth and are added to the built-in def
 ./.agents/skills/proxer/scripts/proxer index
 ```
 
-The index is a snapshot. Re-run `index` after `git checkout`, `git pull`, or any change made outside of `proxer edit`. Run it once per session; `edit` keeps itself up to date afterwards.
+The build is incremental, so running `index` again is cheap: files whose size and modification time still match the manifest are skipped, files whose bytes hash the same are only re-stamped, and rows for deleted paths are dropped. Nothing needs to be remembered between sessions, because `search` does the same work before every query. Run `index` only when you want to pay that cost up front, for example before a timed query or after a large `git pull`.
 
 ### Search
 
@@ -139,10 +146,21 @@ From outside the project, name the root instead of changing directory:
 ```
 
 ```
-[{"root":"/home/dev/code/my-awesome-project","filepath":"internal/auth.go","line":"40-99","snippet":"...<b>AuthMiddleware</b>..."}]
+{
+  "root": "/home/dev/code/my-awesome-project",
+  "indexed_at": "2026-11-16T03:38:29.543151Z",
+  "refreshed": {"added": 1, "changed": 2, "removed": 0},
+  "results": [
+    {"root": "/home/dev/code/my-awesome-project", "filepath": "internal/auth.go", "line": "40-99", "snippet": "...<b>AuthMiddleware</b>..."}
+  ]
+}
 ```
 
-`root` is the absolute path of the indexed project, so results stay unambiguous when one harness drives several projects. `line` is the chunk boundary, not the exact hit. Use the snippet to locate the match inside the chunk.
+`root` is the absolute path of the indexed project, so results stay unambiguous when one harness drives several projects. `indexed_at` is when the index last changed, not when it was last checked. `refreshed` counts the files this call added, changed, and removed; all zero means the index was already current, and the field is absent when `--no-refresh` skipped the check. `results` is empty, not missing, when nothing matches.
+
+`line` is the chunk boundary, not the exact hit. Use the snippet to locate the match inside the chunk.
+
+Pass `--no-refresh` (or set `PROXER_NO_REFRESH=1`) to query the index exactly as it stands. That is the right call when the database is mounted read-only or when a pinned snapshot is the point; it is the wrong call when you expect the answer to describe the tree.
 
 ### Read
 
@@ -193,7 +211,8 @@ Setup for both, including a worked project-scoped MCP config, lives in [docs/INT
 ## Limitations
 
 - **Scope.** Every path must stay inside the root. `read` and `edit` reject `../` and absolute paths that point at another project, because no index entry exists outside the root. Use the harness `read` or `bash` for those files.
-- **Snapshot index.** The index reflects the tree at the last `index` (`edit` refreshes the file it touches). Changes from `git checkout`, another tool, or another process are invisible until the next `index`.
+- **Fresh to a gate, not to a proof.** `search` refreshes by comparing size and modification time, and only reads a file whose stat moved. A same-size write inside the same timestamp tick is therefore skipped until something else changes the file. The hash catches every case where the gate opens; it is not computed on every walk.
+- **Refresh costs a walk.** Every `search` stats the tree, about 40 ms at 8,000 files, and takes the write lock only when something changed. `--no-refresh` avoids both.
 - **Text matching only.** Search matches token prefixes. CamelCase is not split, so `middleware` will not find `AuthMiddleware` while `auth` will. There are no regular expressions or globs.
 - **Capped result set.** `search` returns at most five chunks ordered by rank, so a broad query is truncated rather than complete. Treat a search as a starting point.
 - **Indexed extensions only.** Files outside the known source and document extensions are not searchable. Editing one works, but the change will not appear in `search`.
