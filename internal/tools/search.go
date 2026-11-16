@@ -6,6 +6,7 @@ import (
 	"unicode"
 
 	"github.com/jmoiron/sqlx"
+	"github.com/synt4xer/proxer/database"
 	"github.com/synt4xer/proxer/internal/domain"
 	"github.com/synt4xer/proxer/internal/indexer"
 )
@@ -63,7 +64,7 @@ func PerformSearch(db *sqlx.DB, root, keyword string, opts SearchOptions) (strin
 		}
 	}
 
-	indexedAt, err := indexer.IndexedAt(db)
+	indexedAt, err := database.IndexedAt(db)
 	if err != nil {
 		return "", fmt.Errorf("failed to read the index timestamp: %w", err)
 	}

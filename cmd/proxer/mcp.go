@@ -9,6 +9,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/cobra"
+	"github.com/synt4xer/proxer/database"
 	"github.com/synt4xer/proxer/internal/config"
 	"github.com/synt4xer/proxer/internal/indexer"
 	"github.com/synt4xer/proxer/internal/mcpserver"
@@ -23,7 +24,7 @@ func newMCPCommand() *cobra.Command {
 			manageDBAnnotation: "true",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			serverDB, err := indexer.InitDB(filepath.Join(root, config.DBFile))
+			serverDB, err := database.Open(filepath.Join(root, config.DBFile), indexer.Chunking())
 			if err != nil {
 				return fmt.Errorf("failed to initialize DB: %w", err)
 			}
