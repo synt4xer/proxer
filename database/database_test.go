@@ -87,6 +87,10 @@ func TestOpenRebuildsWhenTheChunkWindowChanges(t *testing.T) {
 	require.NoError(t, second.Get(&overlap, "SELECT value FROM meta WHERE key = 'overlap_size'"))
 	assert.Equal(t, "60", chunkSize)
 	assert.Equal(t, "15", overlap)
+
+	indexedAt, err := database.IndexedAt(second)
+	require.NoError(t, err)
+	assert.Empty(t, indexedAt, "the wipe must clear the timestamp of the rows it dropped")
 }
 
 func TestStoreReplacesChunksWithoutOrphanRows(t *testing.T) {
