@@ -148,13 +148,18 @@ func PerformSearch(db *sqlx.DB, root, keyword string, opts SearchOptions) (strin
 	if err != nil {
 		return "", err
 	}
-	if len(candidates) > limit {
-		candidates = candidates[:limit]
+
+	unique := dedupeByFile(candidates)
+	// A window that was cut short may hide files, and a slice that was capped
+	// hides some it already found. Either way the caller is not seeing the
+	// whole match, and truncated is the field that says so.
+	response.Truncated = len(unique) > limit || total > len(candidates)
+	if len(unique) > limit {
+		unique = unique[:limit]
 	}
-	response.Truncated = total > len(candidates)
 
 	terms := searchTerms(keyword)
-	for _, r := range candidates {
+	for _, r := range unique {
 		response.Results = append(response.Results, domain.SearchResultJSON{
 			Root:     root,
 			Filepath: r.Filepath,
@@ -190,6 +195,23 @@ func rankedCandidates(db *sqlx.DB, matchQuery string, window int) ([]domain.Sear
 		return nil, fmt.Errorf("SQLite query error: %w", err)
 	}
 	return results, nil
+}
+
+// dedupeByFile keeps the best-ranked chunk of each file. The query is already
+// ordered by bm25(), so the first chunk seen for a path is the one worth
+// returning, and the cap then describes files instead of spending several slots
+// on one file that matched in several places.
+func dedupeByFile(candidates []domain.SearchResultDB) []domain.SearchResultDB {
+	seen := make(map[string]struct{}, len(candidates))
+	unique := candidates[:0]
+	for _, candidate := range candidates {
+		if _, ok := seen[candidate.Filepath]; ok {
+			continue
+		}
+		seen[candidate.Filepath] = struct{}{}
+		unique = append(unique, candidate)
+	}
+	return unique
 }
 
 // matchTotal counts every chunk the match reaches, which is what makes a capped
