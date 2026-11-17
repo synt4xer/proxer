@@ -21,6 +21,7 @@ type indexOutput struct {
 type searchInput struct {
 	Keyword string `json:"keyword" jsonschema:"terms to search for; each term matches as a token prefix and multiple terms are OR-ed"`
 	Limit   int    `json:"limit,omitempty" jsonschema:"maximum number of results to return, clamped to 1..50 (default 5)"`
+	Kind    string `json:"kind,omitempty" jsonschema:"which files to search: code, docs, or all (default all, which orders code before docs before generated assets)"`
 }
 
 type readInput struct {
@@ -80,7 +81,8 @@ func (s *Server) addSearchTool() {
 			"camelCase is not split, so 'auth' reaches 'AuthMiddleware' but 'middleware' does not. " +
 			"Before querying it brings the index up to date, so files changed by other tools are found without calling index first. " +
 			"Returns the absolute project root, the indexed_at timestamp of the last index change, the refreshed counts for this call, " +
-			"the total number of matching chunks, whether the result list was truncated, and up to `limit` results (default 5). " +
+			"the total number of matching chunks, whether the result list was truncated, and up to `limit` results (default 5), " +
+			"ordered code first, then documentation, then generated assets unless `kind` narrows it. " +
 			"Each result carries a filepath relative to that root, a line range, a snippet where matches are wrapped in <b> tags, " +
 			"and whether its terms matched the path, the content, or both. " +
 			"Empty or punctuation-only input returns no matches.",
@@ -89,6 +91,7 @@ func (s *Server) addSearchTool() {
 			NoRefresh:   s.noRefresh,
 			IgnoredDirs: s.ignoredDirs,
 			Limit:       in.Limit,
+			Kind:        in.Kind,
 		})
 		if err != nil {
 			return nil, domain.SearchResponse{}, err

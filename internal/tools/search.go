@@ -93,11 +93,13 @@ func buildMatchQuery(keyword string) (string, bool) {
 // is opt-out rather than opt-in so the zero value does the safe thing: the index
 // is brought up to date, and a caller that must not write asks for that
 // explicitly. Limit is clamped rather than validated, so a caller that omits it
-// gets the default instead of an error.
+// gets the default instead of an error. Kind filters and orders the results by
+// path class: the empty value keeps all of them, code first.
 type SearchOptions struct {
 	NoRefresh   bool
 	IgnoredDirs []string
 	Limit       int
+	Kind        string
 }
 
 // PerformSearch answers a keyword query from the index. Unless the caller opts
@@ -105,6 +107,13 @@ type SearchOptions struct {
 // that wrote a file is otherwise invisible to proxer and the stale answer is
 // indistinguishable from "no match".
 func PerformSearch(db *sqlx.DB, root, keyword string, opts SearchOptions) (string, error) {
+	// The kind is validated before the refresh so a typo costs a parse, not a
+	// walk over the tree.
+	kind, err := parseKind(opts.Kind)
+	if err != nil {
+		return "", err
+	}
+
 	response := domain.SearchResponse{
 		Root:    root,
 		Results: make([]domain.SearchResultJSON, 0),
@@ -149,17 +158,17 @@ func PerformSearch(db *sqlx.DB, root, keyword string, opts SearchOptions) (strin
 		return "", err
 	}
 
-	unique := dedupeByFile(candidates)
+	eligible := orderByKind(dedupeByFile(candidates), kind)
 	// A window that was cut short may hide files, and a slice that was capped
 	// hides some it already found. Either way the caller is not seeing the
 	// whole match, and truncated is the field that says so.
-	response.Truncated = len(unique) > limit || total > len(candidates)
-	if len(unique) > limit {
-		unique = unique[:limit]
+	response.Truncated = len(eligible) > limit || total > len(candidates)
+	if len(eligible) > limit {
+		eligible = eligible[:limit]
 	}
 
 	terms := searchTerms(keyword)
-	for _, r := range unique {
+	for _, r := range eligible {
 		response.Results = append(response.Results, domain.SearchResultJSON{
 			Root:     root,
 			Filepath: r.Filepath,
