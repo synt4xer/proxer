@@ -128,6 +128,7 @@ func PerformSearch(db *sqlx.DB, root, keyword string, opts SearchOptions) (strin
 			Added:   refreshed.Added,
 			Changed: refreshed.Changed,
 			Removed: refreshed.Removed,
+			Skipped: refreshed.Skipped,
 		}
 	}
 

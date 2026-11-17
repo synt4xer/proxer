@@ -15,7 +15,7 @@ type indexInput struct{}
 
 type indexOutput struct {
 	Status    string                `json:"status" jsonschema:"human-readable result of the index run"`
-	Refreshed domain.RefreshSummary `json:"refreshed" jsonschema:"files added, changed, and removed by this run; all zero when the index was already current"`
+	Refreshed domain.RefreshSummary `json:"refreshed" jsonschema:"files added, changed, removed, and skipped by this run; all zero when the index was already current"`
 }
 
 type searchInput struct {
@@ -68,6 +68,7 @@ func (s *Server) addIndexTool() {
 				Added:   refreshed.Added,
 				Changed: refreshed.Changed,
 				Removed: refreshed.Removed,
+				Skipped: refreshed.Skipped,
 			},
 		}, nil
 	})

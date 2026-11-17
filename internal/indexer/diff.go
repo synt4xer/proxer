@@ -19,10 +19,11 @@ type Refreshed struct {
 	Added   int `json:"added"`
 	Changed int `json:"changed"`
 	Removed int `json:"removed"`
+	Skipped int `json:"skipped"`
 }
 
 func (r Refreshed) Empty() bool {
-	return r.Added == 0 && r.Changed == 0 && r.Removed == 0
+	return r.Added == 0 && r.Changed == 0 && r.Removed == 0 && r.Skipped == 0
 }
 
 // Diff is the work one delta build has to apply. The four buckets are disjoint:
@@ -173,19 +174,29 @@ func applyDiff(db *sqlx.DB, rootPath string, diff *Diff) (Refreshed, error) {
 		// An added file is absent from the manifest, so by construction it has
 		// no stored chunks: skipping the delete keeps a cold build from paying
 		// for a no-op statement per file.
-		if err := storeCurrentFile(tx, writer, rootPath, entry, false); err != nil {
+		stored, err := storeCurrentFile(tx, writer, rootPath, entry, false)
+		if err != nil {
 			writer.Close()
 			return Refreshed{}, err
 		}
-		refreshed.Added++
+		if stored {
+			refreshed.Added++
+		} else {
+			refreshed.Skipped++
+		}
 	}
 
 	for _, entry := range diff.Changed {
-		if err := storeCurrentFile(tx, writer, rootPath, entry, true); err != nil {
+		stored, err := storeCurrentFile(tx, writer, rootPath, entry, true)
+		if err != nil {
 			writer.Close()
 			return Refreshed{}, err
 		}
-		refreshed.Changed++
+		if stored {
+			refreshed.Changed++
+		} else {
+			refreshed.Skipped++
+		}
 	}
 
 	if err := database.StampIndexedAt(tx); err != nil {
@@ -204,13 +215,14 @@ func applyDiff(db *sqlx.DB, rootPath string, diff *Diff) (Refreshed, error) {
 // manifest row. Reading inside the transaction rather than carrying the bytes
 // from the walk keeps depth bounded: only the files in the diff are ever in
 // memory, and the hash that is stored describes exactly the bytes that were
-// chunked.
+// chunked. Files whose lines exceed config.MaxLineWidth are recorded in the
+// manifest but skipped from chunk storage, returning stored = false.
 //
 // The size and timestamp come from the walk rather than a second stat. A write
 // that lands between the walk and this read leaves the row slightly behind, so
 // the next build re-reads the file and finds the same hash; that costs one read
 // and never produces a wrong answer.
-func storeCurrentFile(tx *sqlx.Tx, writer *database.Writer, rootPath string, entry database.FileRecord, replace bool) error {
+func storeCurrentFile(tx *sqlx.Tx, writer *database.Writer, rootPath string, entry database.FileRecord, replace bool) (bool, error) {
 	path := filepath.Join(rootPath, filepath.FromSlash(entry.Path))
 
 	content, err := os.ReadFile(path)
@@ -218,17 +230,32 @@ func storeCurrentFile(tx *sqlx.Tx, writer *database.Writer, rootPath string, ent
 		if os.IsNotExist(err) {
 			// Removed between the walk and the write: dropping it is the
 			// truthful outcome, and it keeps the manifest and chunks aligned.
-			return database.Remove(tx, entry.Path)
+			return false, database.Remove(tx, entry.Path)
 		}
-		return fmt.Errorf("failed to read %s: %w", entry.Path, err)
+		return false, fmt.Errorf("failed to read %s: %w", entry.Path, err)
 	}
 
 	if int64(len(content)) > config.MaxFileSize {
-		return database.Remove(tx, entry.Path)
+		return false, database.Remove(tx, entry.Path)
 	}
 
 	entry.Size = int64(len(content))
 	entry.Hash = ContentHash(content)
 
-	return writer.Store(entry, string(content), replace)
+	if HasLongLine(content, config.MaxLineWidth) {
+		if replace {
+			if err := database.DeleteChunks(tx, entry.Path); err != nil {
+				return false, err
+			}
+		}
+		if err := writer.StoreManifest(entry); err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+
+	if err := writer.Store(entry, string(content), replace); err != nil {
+		return false, err
+	}
+	return true, nil
 }

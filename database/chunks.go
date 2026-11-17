@@ -77,7 +77,7 @@ func (w *Writer) Close() error {
 // replace only when it might.
 func (w *Writer) Store(rec FileRecord, content string, replace bool) error {
 	if replace {
-		if err := deleteChunks(w.tx, rec.Path); err != nil {
+		if err := DeleteChunks(w.tx, rec.Path); err != nil {
 			return err
 		}
 	}
@@ -138,12 +138,12 @@ func (w *Writer) write(rel, content string) error {
 	return nil
 }
 
-// deleteChunks drops every row stored under rel. The rowids come from
+// DeleteChunks drops every row stored under rel. The rowids come from
 // index_chunks, which is indexed on filepath, so the FTS5 table is only touched
 // through rowid lookups. Measured on 16,000 chunks: 0.05 ms per file against
 // 7.6 ms for the filepath scan this replaces, and the difference grows with the
 // table.
-func deleteChunks(tx *sqlx.Tx, rel string) error {
+func DeleteChunks(tx *sqlx.Tx, rel string) error {
 	if _, err := tx.Exec(
 		"DELETE FROM chunk_search WHERE rowid IN (SELECT rowid FROM index_chunks WHERE filepath = ?)", rel,
 	); err != nil {
