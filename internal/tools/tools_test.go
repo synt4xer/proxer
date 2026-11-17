@@ -585,3 +585,50 @@ func TestSearchWithoutRefreshTrustsTheIndex(t *testing.T) {
 	refreshed := searchAll(t, db, root, "WrittenByAnotherTool")
 	assert.Len(t, refreshed.Results, 1, "the same query with a refresh must find it")
 }
+
+func TestPerformReadLongLines(t *testing.T) {
+	root, db := newToolWorkspace(t)
+
+	// 100 KB single-line file: bufio.Scanner aborted at 64 KB with "token too long".
+	// The reader must succeed, truncate the line past config.MaxLineWidth, append
+	// config.TruncationMarker, and return the hash computed over the full 100 KB.
+	const hundredKB = 100 * 1024
+	longLine := strings.Repeat("A", hundredKB)
+	longPath := filepath.Join(root, "longline.txt")
+	require.NoError(t, os.WriteFile(longPath, []byte(longLine), 0o644))
+
+	t.Run("single-line 100KB file reads back without ceiling and stays bounded", func(t *testing.T) {
+		resultJSON, err := tools.PerformRead(root, "longline.txt", 1, 1)
+		require.NoError(t, err)
+
+		var result domain.ReadResultJSON
+		require.NoError(t, json.Unmarshal([]byte(resultJSON), &result))
+
+		expectedContent := strings.Repeat("A", config.MaxLineWidth) + config.TruncationMarker + "\n"
+		assert.Equal(t, expectedContent, result.Content)
+		assert.Less(t, len(result.Content), hundredKB/10, "read payload must be bounded, not 100 KB")
+		assert.Equal(t, indexer.ContentHash([]byte(longLine)), result.Hash, "hash must cover the full file")
+
+		// The returned hash guards edit: an edit using this hash must succeed.
+		editRes, err := tools.PerformEdit(db, root, "longline.txt", 1, 1, "short", result.Hash, config.DefaultIgnoredDirs)
+		require.NoError(t, err)
+		assert.Contains(t, editRes, "success")
+	})
+
+	t.Run("minified bundle with 50KB line returns truncated output", func(t *testing.T) {
+		const fiftyKB = 50 * 1024
+		minified := "function test(){" + strings.Repeat("x", fiftyKB) + "}"
+		minPath := filepath.Join(root, "bundle.min.js")
+		require.NoError(t, os.WriteFile(minPath, []byte(minified), 0o644))
+
+		resultJSON, err := tools.PerformRead(root, "bundle.min.js", 1, 1)
+		require.NoError(t, err)
+
+		var result domain.ReadResultJSON
+		require.NoError(t, json.Unmarshal([]byte(resultJSON), &result))
+
+		assert.Contains(t, result.Content, config.TruncationMarker)
+		assert.Less(t, len(result.Content), fiftyKB/5, "payload must stay bounded")
+		assert.Equal(t, indexer.ContentHash([]byte(minified)), result.Hash)
+	})
+}

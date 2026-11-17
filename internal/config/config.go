@@ -12,10 +12,12 @@ import (
 )
 
 const (
-	DBFile      = ".proxer.db"
-	MaxFileSize = 1024 * 1024 // 1 MB
-	ChunkSize   = 60
-	OverlapSize = 15
+	DBFile           = ".proxer.db"
+	MaxFileSize      = 1024 * 1024 // 1 MB
+	MaxLineWidth     = 4096        // 4 KB
+	TruncationMarker = " [truncated]"
+	ChunkSize        = 60
+	OverlapSize      = 15
 )
 
 // RootEnvVar names the environment variable consulted when no --root flag is
