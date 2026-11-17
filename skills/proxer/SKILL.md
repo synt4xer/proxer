@@ -28,7 +28,7 @@ Each command prints JSON on stdout. Failures print to stderr and exit non-zero, 
 If the harness has a `proxer` MCP server connected, prefer its tools over the shell binary. They return the same JSON without shell quoting, and `edit` takes the replacement as an argument instead of stdin. The tools are named `mcp__proxer__<tool>`:
 
 - `mcp__proxer__index` — no arguments.
-- `mcp__proxer__search` — `{"keyword": "..."}`. Refreshes the index first, like the CLI.
+- `mcp__proxer__search` — `{"keyword": "..."}`, optionally `"limit"` (1..50, default 5) and `"kind"` (`code`, `docs`, or `all`). Refreshes the index first, like the CLI.
 - `mcp__proxer__read` — `{"filepath": "...", "start": 40, "end": 70}`; `start` defaults to 1 and `end` to 60. Returns the file `hash`.
 - `mcp__proxer__edit` — `{"filepath": "...", "start": 52, "end": 58, "content": "...", "hash": "..."}`; `hash` is the value from the read, and a mismatch rejects the edit.
 
@@ -65,22 +65,27 @@ Returns an envelope:
   "root": "...",
   "indexed_at": "2026-11-16T03:38:29.543151Z",
   "refreshed": {"added": 1, "changed": 0, "removed": 0},
-  "results": [{"root": "...", "filepath": "...", "line": "40-99", "snippet": "...<b>hit</b>..."}]
+  "total": 12,
+  "truncated": true,
+  "results": [{"root": "...", "filepath": "...", "line": "40-99", "snippet": "...<b>hit</b>...", "match": "content"}]
 }
 ```
 
-`results` holds at most 5 matches: `root` is the absolute path of the indexed project, `line` is `"start-end"`, and `snippet` wraps the matched text in `<b>`. `indexed_at` is when the index last changed. `refreshed` counts what this call added, changed, and removed; all zero means the index was already current.
+`results` holds at most `--limit` files, one per file: `root` is the absolute path of the indexed project, `line` is `"start-end"`, `snippet` wraps the matched text in `<b>`, and `match` is `path`, `content`, or `both`. `indexed_at` is when the index last changed. `refreshed` counts what this call added, changed, and removed; all zero means the index was already current. `total` counts every matching chunk and `truncated` says whether more matched than `results` holds, so a broad query is never silently cut.
+
+`-n/--limit` asks for more files (default 5, clamped to 1..50). `--kind code|docs|all` filters by class: `all` is the default and returns code first, then documentation (`.md`, `.mdx`, `.txt`, `.rst`), then generated assets (`*.min.*`, `*.map`, lockfiles). Use `--kind code` when a docs-heavy tree answers a code question with prose.
 
 Add `--no-refresh` (or set `PROXER_NO_REFRESH=1`) to query the index as it stands. Then `refreshed` is absent and a file changed since the last build stays invisible, which is only what you want for a pinned snapshot or a read-only mount.
 
 How matching behaves:
 
 - Terms match as **token prefixes**, so `-k "auth"` finds `AuthMiddleware`.
+- Terms match the **file path as well as the body**, and a path that carries the term outranks a chunk that merely mentions it, so `-k "000001"` finds `db/migrations/mysql/000001_init.up.sql`.
 - CamelCase is not split, so `-k "middleware"` will **not** find `AuthMiddleware`. Start from the beginning of an identifier.
 - Punctuation and FTS5 operators (`AND`, `OR`, `*`) are stripped, so natural language is safe but never errors.
-- Multiple words are OR-ed and ranked by relevance. Prefer one distinctive identifier over a sentence.
+- Multiple words are OR-ed and ranked by relevance, then demoted by class. Prefer one distinctive identifier over a sentence.
 
-Results come from 60-line chunks with a 15-line overlap, so `line` is the chunk boundary, not the exact hit. Use the snippet to see where inside the chunk the match sits.
+Results come from 60-line chunks with a 15-line overlap, so `line` is the chunk boundary, not the exact hit. Use the snippet to see where inside the chunk the match sits. Five slots describe five different files, so one file that matched five times does not fill the answer.
 
 ## read
 
