@@ -3,9 +3,13 @@ package tools
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"os"
+	"strings"
 
+	"github.com/synt4xer/proxer/internal/config"
 	"github.com/synt4xer/proxer/internal/domain"
 	"github.com/synt4xer/proxer/internal/indexer"
 )
@@ -28,23 +32,36 @@ func PerformRead(root, path string, startLine, endLine int) (string, error) {
 		return "", fmt.Errorf("failed to open file: %w", err)
 	}
 
-	scanner := bufio.NewScanner(bytes.NewReader(data))
+	reader := bufio.NewReader(bytes.NewReader(data))
 	var contentBuilder bytes.Buffer
 	currentLine := 1
 
-	for scanner.Scan() {
+	for {
+		line, err := reader.ReadString('\n')
+		if len(line) == 0 && err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return "", fmt.Errorf("error reading file '%s': %w", path, err)
+		}
+
 		if currentLine >= startLine && currentLine <= endLine {
-			contentBuilder.WriteString(scanner.Text())
+			line = strings.TrimSuffix(line, "\n")
+			line = strings.TrimSuffix(line, "\r")
+			contentBuilder.WriteString(indexer.TruncateLine(line, config.MaxLineWidth))
 			contentBuilder.WriteByte('\n')
 		}
 		if currentLine > endLine {
 			break
 		}
 		currentLine++
-	}
 
-	if err := scanner.Err(); err != nil {
-		return "", fmt.Errorf("error reading file '%s': %w", path, err)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return "", fmt.Errorf("error reading file '%s': %w", path, err)
+		}
 	}
 
 	result := domain.ReadResultJSON{
