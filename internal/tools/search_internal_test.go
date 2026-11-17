@@ -6,6 +6,49 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestSearchTermsAndMatchPart(t *testing.T) {
+	terms := searchTerms("where is auth (middleware)?")
+	assert.Equal(t, []string{"where", "is", "auth", "middleware"}, terms)
+
+	tests := []struct {
+		name     string
+		terms    []string
+		filePath string
+		expected string
+	}{
+		{
+			name:     "a token that only names the file is a path hit",
+			terms:    []string{"000001"},
+			filePath: "db/migrations/mysql/000001_init.up.sql",
+			expected: "path",
+		},
+		{
+			name:     "a token that is not in the path matched the body",
+			terms:    []string{"create"},
+			filePath: "db/migrations/mysql/000001_init.up.sql",
+			expected: "content",
+		},
+		{
+			name:     "one term in the path and one in the body is both",
+			terms:    []string{"mysql", "create"},
+			filePath: "db/migrations/mysql/000001_init.up.sql",
+			expected: "both",
+		},
+		{
+			name:     "path matching is case-insensitive",
+			terms:    []string{"MYSQL"},
+			filePath: "db/migrations/mysql/000001_init.up.sql",
+			expected: "path",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, matchPart(tt.terms, tt.filePath))
+		})
+	}
+}
+
 func TestBuildMatchQuery(t *testing.T) {
 	tests := []struct {
 		name     string
