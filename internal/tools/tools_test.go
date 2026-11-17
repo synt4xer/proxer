@@ -278,6 +278,36 @@ func TestSearchFindsAPathOnlyMatch(t *testing.T) {
 	assert.Equal(t, "content", fromContent.Results[0].Match)
 }
 
+// TestSearchDedupesByFile covers the wasted slots in the field report: the same
+// file occupied two of five results, so five slots described one file instead
+// of five.
+func TestSearchDedupesByFile(t *testing.T) {
+	root, db := newToolWorkspace(t)
+
+	var body strings.Builder
+	body.WriteString("package big\n")
+	for i := range 200 {
+		fmt.Fprintf(&body, "// Marker line %d\n", i)
+	}
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "pkg"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "pkg", "big.go"), []byte(body.String()), 0o644))
+	for _, name := range []string{"one.go", "two.go"} {
+		require.NoError(t, os.WriteFile(filepath.Join(root, "pkg", name), []byte("package pkg\n\n// Marker here\n"), 0o644))
+	}
+	mustIndex(t, db, root, config.DefaultIgnoredDirs)
+
+	response := searchAll(t, db, root, "Marker")
+	require.Len(t, response.Results, 3, "five slots must describe three files, not one file three times")
+
+	seen := make(map[string]struct{}, len(response.Results))
+	for _, result := range response.Results {
+		_, duplicate := seen[result.Filepath]
+		assert.False(t, duplicate, "%s appeared more than once", result.Filepath)
+		seen[result.Filepath] = struct{}{}
+	}
+	assert.Contains(t, seen, "pkg/big.go", "the many-chunked file must still be represented")
+}
+
 // TestSearchLimitAndTotal pins the honesty of a capped answer: the caller can
 // ask for more, sees how much matched, and is told when the list it got is not
 // everything the query found.
