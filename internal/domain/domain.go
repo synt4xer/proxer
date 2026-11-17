@@ -18,11 +18,14 @@ type RefreshSummary struct {
 
 // SearchResponse is the envelope around a result set. The index metadata leads
 // so a caller sees whether the answer came from the tree it is looking at before
-// it reads the results.
+// it reads the results. Total counts every matching chunk, so Truncated is a
+// statement about the whole match rather than about the returned slice.
 type SearchResponse struct {
 	Root      string             `json:"root"`
 	IndexedAt string             `json:"indexed_at,omitempty"`
 	Refreshed *RefreshSummary    `json:"refreshed,omitempty"`
+	Total     int                `json:"total"`
+	Truncated bool               `json:"truncated"`
 	Results   []SearchResultJSON `json:"results"`
 }
 

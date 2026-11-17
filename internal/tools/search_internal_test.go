@@ -106,3 +106,24 @@ func TestBuildMatchQuery(t *testing.T) {
 		})
 	}
 }
+
+func TestClampLimitAndCandidateWindow(t *testing.T) {
+	tests := []struct {
+		limit  int
+		clamp  int
+		window int
+	}{
+		{limit: 0, clamp: defaultLimit, window: 200},
+		{limit: -3, clamp: defaultLimit, window: 200},
+		{limit: 1, clamp: 1, window: minCandidateWindow},
+		{limit: 5, clamp: 5, window: 200},
+		{limit: 20, clamp: 20, window: 200},
+		{limit: maxLimit, clamp: maxLimit, window: maxCandidateWindow},
+		{limit: maxLimit + 100, clamp: maxLimit, window: maxCandidateWindow},
+	}
+
+	for _, tt := range tests {
+		assert.Equal(t, tt.clamp, clampLimit(tt.limit), "limit %d", tt.limit)
+		assert.Equal(t, tt.window, candidateWindow(clampLimit(tt.limit)), "limit %d", tt.limit)
+	}
+}

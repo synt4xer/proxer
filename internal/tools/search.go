@@ -12,18 +12,53 @@ import (
 )
 
 const (
-	// resultLimit is the context guard: five chunks locate a symbol and stay
+	// defaultLimit is the context guard: five results locate a symbol and stay
 	// cheap enough to run on every question.
-	resultLimit = 5
-	// candidateWindow is how many ranked chunks the query fetches before the
-	// cap applies. Ranking cost is dominated by the match, not the width, so a
-	// window several times the result limit is nearly free.
-	candidateWindow = 50
+	defaultLimit = 5
+	// maxLimit bounds what a caller may ask for. A wider answer stops being a
+	// locator and becomes the raw scan the tool exists to replace.
+	maxLimit = 50
+	// candidateWindowFactor widens the ranked window beyond the requested
+	// limit, so dedupe and demotion still have candidates left once the cap
+	// applies. Ranking cost is dominated by the match, not the width, so the
+	// wider window is nearly free.
+	candidateWindowFactor = 40
+	minCandidateWindow    = 50
+	maxCandidateWindow    = 200
 	// pathWeight is the bm25 weight of the filepath column. A token that names
 	// a file outranks the same token sitting in the middle of a chunk, which is
 	// what lets "000001_init" find a migration whose path is its only identity.
 	pathWeight = 5
 )
+
+// clampLimit keeps a caller-supplied limit inside the range the tool promises.
+// Zero and negatives are the "unset" case, not an error: both interfaces treat
+// a missing limit as the default.
+func clampLimit(limit int) int {
+	switch {
+	case limit <= 0:
+		return defaultLimit
+	case limit > maxLimit:
+		return maxLimit
+	}
+	return limit
+}
+
+// candidateWindow is how many ranked chunks the query fetches for limit results
+// before the cap applies. Forty times the limit, floored at 50 rows so a small
+// limit still has room to dedupe, and capped at 200 because the window stops
+// paying for itself: at 65,800 chunks a 200-row window costs 53 ms against
+// 55 ms for 500.
+func candidateWindow(limit int) int {
+	window := limit * candidateWindowFactor
+	if window < minCandidateWindow {
+		return minCandidateWindow
+	}
+	if window > maxCandidateWindow {
+		return maxCandidateWindow
+	}
+	return window
+}
 
 // searchTerms splits free-form input into the terms the query will use. It is
 // separate from buildMatchQuery because the caller also tests the terms
@@ -54,13 +89,15 @@ func buildMatchQuery(keyword string) (string, bool) {
 	return strings.Join(quoted, " OR "), true
 }
 
-// SearchOptions carries the two things PerformSearch needs besides the query.
-// NoRefresh is opt-out rather than opt-in so the zero value does the safe
-// thing: the index is brought up to date, and a caller that must not write asks
-// for that explicitly.
+// SearchOptions carries what PerformSearch needs besides the query. NoRefresh
+// is opt-out rather than opt-in so the zero value does the safe thing: the index
+// is brought up to date, and a caller that must not write asks for that
+// explicitly. Limit is clamped rather than validated, so a caller that omits it
+// gets the default instead of an error.
 type SearchOptions struct {
 	NoRefresh   bool
 	IgnoredDirs []string
+	Limit       int
 }
 
 // PerformSearch answers a keyword query from the index. Unless the caller opts
@@ -96,13 +133,25 @@ func PerformSearch(db *sqlx.DB, root, keyword string, opts SearchOptions) (strin
 		return encodeJSON(response)
 	}
 
-	candidates, err := rankedCandidates(db, matchQuery, candidateWindow)
+	limit := clampLimit(opts.Limit)
+
+	// total is the honest measure of how much matched, so a capped answer can
+	// say so. It counts chunks, not files: count(DISTINCT filepath) costs
+	// 233 ms at 65,800 chunks against 5 ms for this one.
+	total, err := matchTotal(db, matchQuery)
 	if err != nil {
 		return "", err
 	}
-	if len(candidates) > resultLimit {
-		candidates = candidates[:resultLimit]
+	response.Total = total
+
+	candidates, err := rankedCandidates(db, matchQuery, candidateWindow(limit))
+	if err != nil {
+		return "", err
 	}
+	if len(candidates) > limit {
+		candidates = candidates[:limit]
+	}
+	response.Truncated = total > len(candidates)
 
 	terms := searchTerms(keyword)
 	for _, r := range candidates {
@@ -141,6 +190,16 @@ func rankedCandidates(db *sqlx.DB, matchQuery string, window int) ([]domain.Sear
 		return nil, fmt.Errorf("SQLite query error: %w", err)
 	}
 	return results, nil
+}
+
+// matchTotal counts every chunk the match reaches, which is what makes a capped
+// result set visible to the caller.
+func matchTotal(db *sqlx.DB, matchQuery string) (int, error) {
+	var total int
+	if err := db.Get(&total, "SELECT count(*) FROM chunk_search WHERE chunk_search MATCH ?", matchQuery); err != nil {
+		return 0, fmt.Errorf("SQLite count error: %w", err)
+	}
+	return total, nil
 }
 
 // matchPart reports where the terms landed: in the file's path, in its content,
