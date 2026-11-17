@@ -14,6 +14,7 @@ type RefreshSummary struct {
 	Added   int `json:"added"`
 	Changed int `json:"changed"`
 	Removed int `json:"removed"`
+	Skipped int `json:"skipped"`
 }
 
 // SearchResponse is the envelope around a result set. The index metadata leads

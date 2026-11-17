@@ -3,6 +3,7 @@ package indexer_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -291,4 +292,71 @@ func TestReindexFileDropsTheManifestRowOfADeletedFile(t *testing.T) {
 	var rows int
 	require.NoError(t, db.Get(&rows, "SELECT COUNT(*) FROM indexed_files WHERE filepath = ?", "gone.go"))
 	assert.Zero(t, rows, "a deleted file must not survive in the manifest")
+}
+
+func TestDeltaBuildSkipsLongLineFiles(t *testing.T) {
+	root := t.TempDir()
+	db := openWorkspaceDB(t, root)
+	ignored := config.DefaultIgnoredDirs
+
+	// Single-line file exceeding config.MaxLineWidth (e.g. 5,000 characters).
+	longContent := "// minified " + strings.Repeat("x", config.MaxLineWidth+100) + "\n"
+	write(t, filepath.Join(root, "bundle.min.js"), longContent)
+
+	t.Run("reports file as skipped rather than added/indexed", func(t *testing.T) {
+		refreshed := mustIndex(t, db, root, ignored)
+		assert.Equal(t, indexer.Refreshed{Skipped: 1}, refreshed)
+		assert.Empty(t, chunkRowIDs(t, db, "bundle.min.js"), "skipped files must have no chunk rows")
+		assert.Zero(t, countChunks(t, db, "bundle.min.js"))
+
+		// Manifest must still record the file so subsequent walks skip re-reading it.
+		var count int
+		require.NoError(t, db.Get(&count, "SELECT COUNT(*) FROM indexed_files WHERE filepath = ?", "bundle.min.js"))
+		assert.Equal(t, 1, count, "skipped files must be present in the manifest to prevent re-reading on every search")
+	})
+
+	t.Run("unchanged skipped file causes no work and takes no write lock", func(t *testing.T) {
+		refreshed := mustIndex(t, db, root, ignored)
+		assert.True(t, refreshed.Empty(), "an unchanged skipped file must not trigger any delta work: %+v", refreshed)
+	})
+
+	t.Run("re-chunked when reformatted to short lines", func(t *testing.T) {
+		write(t, filepath.Join(root, "bundle.min.js"), "function normal() {}\n// short line\n")
+		touch(t, filepath.Join(root, "bundle.min.js"))
+
+		refreshed := mustIndex(t, db, root, ignored)
+		assert.Equal(t, indexer.Refreshed{Changed: 1}, refreshed)
+		assert.NotEmpty(t, chunkRowIDs(t, db, "bundle.min.js"), "reformatted file must now be indexed")
+	})
+
+	t.Run("chunks removed when modified into a long-line file", func(t *testing.T) {
+		write(t, filepath.Join(root, "bundle.min.js"), longContent)
+		touch(t, filepath.Join(root, "bundle.min.js"))
+
+		refreshed := mustIndex(t, db, root, ignored)
+		assert.Equal(t, indexer.Refreshed{Skipped: 1}, refreshed)
+		assert.Empty(t, chunkRowIDs(t, db, "bundle.min.js"), "chunks must be dropped when file becomes minified")
+	})
+}
+
+func TestReindexFileSkipsLongLines(t *testing.T) {
+	root := t.TempDir()
+	db := openWorkspaceDB(t, root)
+	ignored := config.DefaultIgnoredDirs
+
+	path := filepath.Join(root, "code.js")
+	write(t, path, "function normal() {}\n")
+	mustIndex(t, db, root, ignored)
+	require.NotEmpty(t, chunkRowIDs(t, db, "code.js"))
+
+	// Rewrite to have a line exceeding config.MaxLineWidth
+	longContent := "function long() {" + strings.Repeat("z", config.MaxLineWidth+50) + "}"
+	write(t, path, longContent)
+	require.NoError(t, indexer.ReindexFile(db, root, path, ignored))
+
+	assert.Empty(t, chunkRowIDs(t, db, "code.js"), "chunks must be removed when file exceeds max line width")
+
+	var rows int
+	require.NoError(t, db.Get(&rows, "SELECT COUNT(*) FROM indexed_files WHERE filepath = ?", "code.js"))
+	assert.Equal(t, 1, rows, "manifest row must survive to record current hash/size/mtime")
 }

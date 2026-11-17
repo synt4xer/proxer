@@ -107,6 +107,13 @@ func reindexFile(tx *sqlx.Tx, writer *database.Writer, rel, path string, ignored
 		Hash:    ContentHash(content),
 	}
 
+	if HasLongLine(content, config.MaxLineWidth) {
+		if err := database.DeleteChunks(tx, rel); err != nil {
+			return err
+		}
+		return writer.StoreManifest(entry)
+	}
+
 	return writer.Store(entry, string(content), true)
 }
 

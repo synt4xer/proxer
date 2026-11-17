@@ -72,8 +72,8 @@ func main() {
 				os.Exit(1)
 			}
 			fmt.Printf(
-				`{"status": "indexed_successfully", "refreshed": {"added": %d, "changed": %d, "removed": %d}}`+"\n",
-				refreshed.Added, refreshed.Changed, refreshed.Removed,
+				`{"status": "indexed_successfully", "refreshed": {"added": %d, "changed": %d, "removed": %d, "skipped": %d}}`+"\n",
+				refreshed.Added, refreshed.Changed, refreshed.Removed, refreshed.Skipped,
 			)
 		},
 	}
