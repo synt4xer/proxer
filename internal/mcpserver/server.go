@@ -12,7 +12,7 @@ import (
 )
 
 // Version is reported to MCP clients during initialization.
-const Version = "0.4.0"
+const Version = "0.5.0"
 
 const instructions = `proxer indexes a local project and exposes four tools: index, search, read, and edit.
 
