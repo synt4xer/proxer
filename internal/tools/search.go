@@ -143,26 +143,51 @@ func PerformSearch(db *sqlx.DB, root, keyword string, opts SearchOptions) (strin
 	}
 
 	limit := clampLimit(opts.Limit)
+	window := candidateWindow(limit)
+
+	// An explicit kind narrows the query itself, not only the answer: a window
+	// that documentation filled still has to be able to produce code.
+	fetchQuery := matchQuery
+	switch kind {
+	case kindCode:
+		fetchQuery = excludeDocs(matchQuery)
+	case kindDocs:
+		fetchQuery = restrictToDocs(matchQuery)
+	}
 
 	// total is the honest measure of how much matched, so a capped answer can
 	// say so. It counts chunks, not files: count(DISTINCT filepath) costs
 	// 233 ms at 65,800 chunks against 5 ms for this one.
-	total, err := matchTotal(db, matchQuery)
+	total, err := matchTotal(db, fetchQuery)
 	if err != nil {
 		return "", err
 	}
 	response.Total = total
 
-	candidates, err := rankedCandidates(db, matchQuery, candidateWindow(limit))
+	candidates, err := rankedCandidates(db, fetchQuery, window)
 	if err != nil {
 		return "", err
 	}
 
 	eligible := orderByKind(dedupeByFile(candidates), kind)
+
+	// Demotion can only reorder what the window contains. Fifty small files
+	// that mention a token densely outrank one mention inside a large source
+	// file, so a full window can hold no code at all. Ask once more with
+	// documentation excluded; on a tree where the kinds are interleaved the
+	// ordinary query already answered and this costs nothing.
+	if kind == kindAll && len(candidates) == window && len(partitionByKind(eligible)[kindCode]) == 0 {
+		hidden, err := rankedCandidates(db, excludeDocs(matchQuery), window)
+		if err != nil {
+			return "", err
+		}
+		eligible = append(filterKind(dedupeByFile(hidden), kindCode), eligible...)
+	}
+
 	// A window that was cut short may hide files, and a slice that was capped
 	// hides some it already found. Either way the caller is not seeing the
 	// whole match, and truncated is the field that says so.
-	response.Truncated = len(eligible) > limit || total > len(candidates)
+	response.Truncated = len(eligible) > limit || total > window
 	if len(eligible) > limit {
 		eligible = eligible[:limit]
 	}
