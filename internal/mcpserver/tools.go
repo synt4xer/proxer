@@ -20,6 +20,7 @@ type indexOutput struct {
 
 type searchInput struct {
 	Keyword string `json:"keyword" jsonschema:"terms to search for; each term matches as a token prefix and multiple terms are OR-ed"`
+	Limit   int    `json:"limit,omitempty" jsonschema:"maximum number of results to return, clamped to 1..50 (default 5)"`
 }
 
 type readInput struct {
@@ -75,15 +76,19 @@ func (s *Server) addSearchTool() {
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name: "search",
 		Description: "Search the full-text index. Every term matches as a token prefix and multiple terms are OR-ed. " +
+			"Terms are matched against file paths as well as content, so a token that only names a file still finds it. " +
 			"camelCase is not split, so 'auth' reaches 'AuthMiddleware' but 'middleware' does not. " +
 			"Before querying it brings the index up to date, so files changed by other tools are found without calling index first. " +
 			"Returns the absolute project root, the indexed_at timestamp of the last index change, the refreshed counts for this call, " +
-			"and up to 5 results, each with a filepath relative to that root, a line range, and a snippet where matches are wrapped in <b> tags. " +
+			"the total number of matching chunks, whether the result list was truncated, and up to `limit` results (default 5). " +
+			"Each result carries a filepath relative to that root, a line range, a snippet where matches are wrapped in <b> tags, " +
+			"and whether its terms matched the path, the content, or both. " +
 			"Empty or punctuation-only input returns no matches.",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in searchInput) (*mcp.CallToolResult, domain.SearchResponse, error) {
 		resultJSON, err := tools.PerformSearch(s.db, s.root, in.Keyword, tools.SearchOptions{
 			NoRefresh:   s.noRefresh,
 			IgnoredDirs: s.ignoredDirs,
+			Limit:       in.Limit,
 		})
 		if err != nil {
 			return nil, domain.SearchResponse{}, err

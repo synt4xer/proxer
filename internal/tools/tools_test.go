@@ -2,6 +2,7 @@ package tools_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -277,6 +278,39 @@ func TestSearchFindsAPathOnlyMatch(t *testing.T) {
 	assert.Equal(t, "content", fromContent.Results[0].Match)
 }
 
+// TestSearchLimitAndTotal pins the honesty of a capped answer: the caller can
+// ask for more, sees how much matched, and is told when the list it got is not
+// everything the query found.
+func TestSearchLimitAndTotal(t *testing.T) {
+	root, db := newToolWorkspace(t)
+
+	for i := range 12 {
+		path := filepath.Join(root, "pkg", fmt.Sprintf("file%02d.go", i))
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, []byte("package pkg\n\nfunc SharedThing() {}\n"), 0o644))
+	}
+	mustIndex(t, db, root, config.DefaultIgnoredDirs)
+
+	defaults := searchAll(t, db, root, "SharedThing")
+	assert.Len(t, defaults.Results, 5, "the default limit must stay a context guard")
+	assert.Equal(t, 12, defaults.Total, "total must count the whole match, not the returned slice")
+	assert.True(t, defaults.Truncated, "a capped answer must say it was capped")
+
+	wide := searchWith(t, db, root, "SharedThing", tools.SearchOptions{Limit: 20})
+	assert.Len(t, wide.Results, 12)
+	assert.Equal(t, 12, wide.Total)
+	assert.False(t, wide.Truncated, "a complete answer must not claim truncation")
+
+	clamped := searchWith(t, db, root, "SharedThing", tools.SearchOptions{Limit: 500})
+	assert.Len(t, clamped.Results, 12, "a limit above the maximum must clamp, not error")
+	assert.False(t, clamped.Truncated)
+
+	missing := searchWith(t, db, root, "NoSuchTokenAnywhere", tools.SearchOptions{Limit: 20})
+	assert.Empty(t, missing.Results)
+	assert.Zero(t, missing.Total)
+	assert.False(t, missing.Truncated)
+}
+
 func TestJSONOutputIsNotHTMLEscaped(t *testing.T) {
 	root, db := newToolWorkspace(t)
 
@@ -364,8 +398,18 @@ func searchJSON(t *testing.T, db *sqlx.DB, root, keyword string) string {
 func searchAll(t *testing.T, db *sqlx.DB, root, keyword string) domain.SearchResponse {
 	t.Helper()
 
+	return searchWith(t, db, root, keyword, toolSearchOptions)
+}
+
+func searchWith(t *testing.T, db *sqlx.DB, root, keyword string, opts tools.SearchOptions) domain.SearchResponse {
+	t.Helper()
+
+	opts.IgnoredDirs = config.DefaultIgnoredDirs
+	resultJSON, err := tools.PerformSearch(db, root, keyword, opts)
+	require.NoError(t, err)
+
 	var response domain.SearchResponse
-	require.NoError(t, json.Unmarshal([]byte(searchJSON(t, db, root, keyword)), &response))
+	require.NoError(t, json.Unmarshal([]byte(resultJSON), &response))
 	return response
 }
 
