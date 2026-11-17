@@ -254,6 +254,29 @@ func TestPerformEditRejectsAStaleHash(t *testing.T) {
 	})
 }
 
+// TestSearchFindsAPathOnlyMatch covers the file the field report could not
+// find: its identity lives in the path, so a token that appears nowhere in the
+// body still has to reach it.
+func TestSearchFindsAPathOnlyMatch(t *testing.T) {
+	root, db := newToolWorkspace(t)
+
+	migration := filepath.Join(root, "db", "migrations", "mysql", "000001_init.up.sql")
+	require.NoError(t, os.MkdirAll(filepath.Dir(migration), 0o755))
+	require.NoError(t, os.WriteFile(migration, []byte("CREATE TABLE users (id INTEGER);\n"), 0o644))
+	mustIndex(t, db, root, config.DefaultIgnoredDirs)
+
+	for _, keyword := range []string{"000001", "mysql", "up"} {
+		response := searchAll(t, db, root, keyword)
+		require.NotEmpty(t, response.Results, "keyword %q must find the migration by its path", keyword)
+		assert.Equal(t, "db/migrations/mysql/000001_init.up.sql", response.Results[0].Filepath)
+		assert.Equal(t, "path", response.Results[0].Match, "keyword %q matched the path, not the body", keyword)
+	}
+
+	fromContent := searchAll(t, db, root, "CREATE")
+	require.NotEmpty(t, fromContent.Results)
+	assert.Equal(t, "content", fromContent.Results[0].Match)
+}
+
 func TestJSONOutputIsNotHTMLEscaped(t *testing.T) {
 	root, db := newToolWorkspace(t)
 
