@@ -82,27 +82,57 @@ func parseKind(value string) (fileKind, error) {
 	}
 }
 
+// docsPathMatch constrains an FTS5 expression to the paths of documentation.
+// FTS5 tokenizes a path into its segments, so ".md" becomes the token "md".
+// The filter is a coarse pre-filter for the query; the exact classification
+// still happens in Go, where a path with a doc token in a directory name is
+// caught.
+const docsPathMatch = "(filepath:md OR filepath:mdx OR filepath:txt OR filepath:rst)"
+
+// restrictToDocs narrows a match to documentation paths.
+func restrictToDocs(matchQuery string) string {
+	return "(" + matchQuery + ") AND " + docsPathMatch
+}
+
+// excludeDocs narrows a match to everything that is not documentation. It is
+// what makes an explicit --kind code honest when documentation outranks code,
+// and what recovers code from a window that documentation filled.
+func excludeDocs(matchQuery string) string {
+	return "(" + matchQuery + ") NOT " + docsPathMatch
+}
+
+// partitionByKind groups candidates by demotion class, keeping the order they
+// were ranked in inside each group.
+func partitionByKind(candidates []domain.SearchResultDB) [3][]domain.SearchResultDB {
+	var groups [3][]domain.SearchResultDB
+	for _, candidate := range candidates {
+		k := classifyPath(candidate.Filepath)
+		groups[k] = append(groups[k], candidate)
+	}
+	return groups
+}
+
+// filterKind drops every candidate that is not of kind.
+func filterKind(candidates []domain.SearchResultDB, kind fileKind) []domain.SearchResultDB {
+	kept := candidates[:0]
+	for _, candidate := range candidates {
+		if classifyPath(candidate.Filepath) == kind {
+			kept = append(kept, candidate)
+		}
+	}
+	return kept
+}
+
 // orderByKind filters and orders candidates so the scarce slots describe code
 // before documentation and documentation before generated assets. With kindAll
 // every group survives, in that order; with a specific kind the others are
 // dropped, which is the escape hatch for a question that really is about docs.
 func orderByKind(candidates []domain.SearchResultDB, kind fileKind) []domain.SearchResultDB {
 	if kind != kindAll {
-		kept := candidates[:0]
-		for _, candidate := range candidates {
-			if classifyPath(candidate.Filepath) == kind {
-				kept = append(kept, candidate)
-			}
-		}
-		return kept
+		return filterKind(candidates, kind)
 	}
 
-	var groups [3][]domain.SearchResultDB
-	for _, candidate := range candidates {
-		k := classifyPath(candidate.Filepath)
-		groups[k] = append(groups[k], candidate)
-	}
-
+	groups := partitionByKind(candidates)
 	ordered := make([]domain.SearchResultDB, 0, len(candidates))
 	for _, group := range groups {
 		ordered = append(ordered, group...)

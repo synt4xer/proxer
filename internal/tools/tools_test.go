@@ -377,6 +377,50 @@ func TestSearchLimitAndTotal(t *testing.T) {
 	assert.False(t, missing.Truncated)
 }
 
+// TestSearchSurvivesADocSaturatedWindow covers the case demotion alone cannot
+// fix: small, dense documentation outranks a single mention inside a large
+// source file, fills the whole ranked window, and leaves the partition with no
+// code to promote.
+func TestSearchSurvivesADocSaturatedWindow(t *testing.T) {
+	root, db := newToolWorkspace(t)
+
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "docs"), 0o755))
+	for i := range 250 {
+		var doc strings.Builder
+		for range 4 {
+			doc.WriteString("Crowded Crowded Crowded Crowded Crowded marker\n")
+		}
+		name := filepath.Join(root, "docs", fmt.Sprintf("note%03d.md", i))
+		require.NoError(t, os.WriteFile(name, []byte(doc.String()), 0o644))
+	}
+
+	var source strings.Builder
+	source.WriteString("package app\n")
+	for i := range 200 {
+		fmt.Fprintf(&source, "// line %d\n", i)
+	}
+	source.WriteString("func Crowded() {}\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "internal"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "internal", "app.go"), []byte(source.String()), 0o644))
+	mustIndex(t, db, root, config.DefaultIgnoredDirs)
+
+	// The docs really do outrank the code: an explicit docs query fills the
+	// five slots without reaching app.go.
+	docs := searchWith(t, db, root, "Crowded", tools.SearchOptions{Kind: "docs"})
+	require.Len(t, docs.Results, 5)
+	assert.NotContains(t, resultPaths(docs), "internal/app.go")
+
+	all := searchAll(t, db, root, "Crowded")
+	require.NotEmpty(t, all.Results)
+	assert.Equal(t, "internal/app.go", all.Results[0].Filepath,
+		"code must lead even when documentation filled the ranked window")
+	assert.Equal(t, "content", all.Results[0].Match)
+
+	code := searchWith(t, db, root, "Crowded", tools.SearchOptions{Kind: "code"})
+	require.Len(t, code.Results, 1, "an explicit kind must search its own paths, not only filter the docs a shared window returned")
+	assert.Equal(t, []string{"internal/app.go"}, resultPaths(code))
+}
+
 func TestJSONOutputIsNotHTMLEscaped(t *testing.T) {
 	root, db := newToolWorkspace(t)
 
