@@ -26,11 +26,15 @@ type SearchResponse struct {
 	Results   []SearchResultJSON `json:"results"`
 }
 
+// SearchResultJSON is one match handed to the caller. Match says whether the
+// terms were found in the file's path, its content, or both: a path-only hit
+// means the chunk boundary is not necessarily where the interesting code is.
 type SearchResultJSON struct {
 	Root     string `json:"root"`
 	Filepath string `json:"filepath"`
 	Line     string `json:"line"`
 	Snippet  string `json:"snippet"`
+	Match    string `json:"match"`
 }
 
 type ReadResultJSON struct {
