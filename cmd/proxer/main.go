@@ -79,6 +79,7 @@ func main() {
 	}
 
 	var keyword string
+	var limit int
 	var noRefresh bool
 	var searchCmd = &cobra.Command{
 		Use:   "search",
@@ -92,6 +93,7 @@ func main() {
 			resultJSON, err := tools.PerformSearch(db, root, keyword, tools.SearchOptions{
 				NoRefresh:   noRefresh || config.RefreshDisabled(),
 				IgnoredDirs: ignoredDirs,
+				Limit:       limit,
 			})
 			if err != nil {
 				fmt.Fprintln(os.Stderr, err.Error())
@@ -101,6 +103,7 @@ func main() {
 		},
 	}
 	searchCmd.Flags().StringVarP(&keyword, "keyword", "k", "", "Keyword for FTS5 search (required)")
+	searchCmd.Flags().IntVarP(&limit, "limit", "n", 5, "Maximum number of results to return (1 to 50)")
 	searchCmd.Flags().BoolVar(&noRefresh, "no-refresh", false, "Query the index as it stands instead of bringing it up to date first (also PROXER_NO_REFRESH=1)")
 	searchCmd.MarkFlagRequired("keyword")
 
