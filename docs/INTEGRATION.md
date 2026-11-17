@@ -49,14 +49,15 @@ pi mcp add -l proxer -- .agents/skills/proxer/scripts/proxer mcp --root .
 
 | Tool | Parameters | Result |
 | --- | --- | --- |
-| `index` | none | `{status, refreshed}` — incremental; `refreshed` counts added, changed, and removed files, and three zeros mean the index was already current |
+| `index` | none | `{status, refreshed}` — incremental; `refreshed` counts added, changed, removed, and skipped files, and four zeros mean the index was already current |
 | `search` | `keyword`, `limit` (default 5, clamped 1..50), `kind` (`code`, `docs`, or `all`) | `{root, indexed_at, refreshed, total, truncated, results[]}`, each result `{root, filepath, line, snippet, match}`; `refreshed` is absent when `PROXER_NO_REFRESH=1`, and `results` is an empty array, not null, when nothing matches |
 | `read` | `filepath`, `start` (default 1), `end` (default 60) | `{root, filepath, content, hash}` |
 | `edit` | `filepath`, `start`, `end`, `content`, `hash` (optional) | `{status, message}` |
 
 `indexed_at` is when the index last changed, not when this call checked it, so a model can tell a fresh answer from a replayed one. `line` is the chunk boundary (`"136-181"`), not the exact hit; the snippet wraps the matches in `<b>` tags for the model to locate them inside the chunk. `match` says whether the terms were found in the path, the content, or both, so a path-only hit does not send the model reading a chunk that has nothing to do with it. `total` counts every matching chunk and `truncated` says whether the result list is smaller than the match, which is what makes `limit` a decision the model can make rather than a wall. A client written before v0.4.0 that read `search`'s top-level array must read `results` instead.
 
-Two behaviours are worth knowing when you write the tool descriptions in a harness prompt:
+Three behaviours are worth knowing when you write the tool descriptions in a harness prompt:
 
 - `search` returns at most `limit` files (five by default), ordered code first, then docs, then generated assets, so a broad keyword is truncated rather than complete. `truncated` and `total` say so, and the model should treat a hit as a starting point and follow up with `read`.
+- `read` has no per-line length ceiling; lines longer than 4,096 characters are truncated past that width with ` [truncated]` to keep payloads bounded, while `hash` covers the entire file. Files with lines exceeding 4,096 characters are skipped during indexing to keep candidate sets clean.
 - `edit` rejects a `hash` that no longer matches the file, and the rejection is an error, not a silent no-op. Carry the hash from `read` so a concurrent write is refused instead of overwritten.

@@ -156,9 +156,9 @@ Results are printed as JSON on stdout; failures go to stderr with a non-zero exi
 
 | Command | Purpose |
 | --- | --- |
-| `index` | Bring `.proxer.db` in line with the project tree, touching only new, changed, and deleted files. |
+| `index` | Bring `.proxer.db` in line with the project tree, touching only new, changed, and deleted files (skipping files with lines exceeding 4,096 chars). |
 | `search -k <keyword> [-n <limit>] [--kind code|docs|all] [--no-refresh]` | Refresh the index, then return up to `limit` distinct files (default 5) inside `{root, indexed_at, refreshed, total, truncated, results}`. |
-| `read -f <file> -s <start> -e <end>` | Return `root`, `filepath`, the inclusive line range, and the file `hash` as JSON. |
+| `read -f <file> -s <start> -e <end>` | Return `root`, `filepath`, the inclusive line range (truncated past 4,096 chars with ` [truncated]`), and the file `hash` as JSON. |
 | `edit -f <file> -s <start> -e <end> [--hash <hash>]` | Replace the range with stdin content, then reindex that file. |
 | `mcp` | Serve all four operations as MCP tools over stdio. |
 
@@ -180,7 +180,7 @@ Names match whole directory names at any depth and are added to the built-in def
 ./.agents/skills/proxer/scripts/proxer index
 ```
 
-The build is incremental, so running `index` again is cheap: files whose size and modification time still match the manifest are skipped, files whose bytes hash the same are only re-stamped, and rows for deleted paths are dropped. Nothing needs to be remembered between sessions, because `search` does the same work before every query. Run `index` only when you want to pay that cost up front, for example before a timed query or after a large `git pull`.
+The build is incremental, so running `index` again is cheap: files whose size and modification time still match the manifest are skipped, files whose bytes hash the same are only re-stamped, and rows for deleted paths are dropped. Files with lines longer than 4,096 characters (such as minified code or single-line bundles) are skipped at index time and counted in `skipped`, preventing generated assets from polluting search results. Nothing needs to be remembered between sessions, because `search` does the same work before every query. Run `index` only when you want to pay that cost up front, for example before a timed query or after a large `git pull`.
 
 ### Search
 
@@ -222,6 +222,8 @@ Pass `--no-refresh` (or set `PROXER_NO_REFRESH=1`) to query the index exactly as
 ```
 
 The result is `{"root": "...", "filepath": "...", "content": "...", "hash": "..."}`; `root` is the absolute path of the indexed project, `filepath` is echoed as given, and `hash` is the SHA-256 of the whole file at read time.
+
+`read` operates without a per-line buffer ceiling. Lines exceeding 4,096 characters are truncated with an explicit ` [truncated]` marker so that payloads stay bounded (for example, reading a minified bundle returns truncated lines instead of a 50+ KB payload, and a 100 KB single-line file reads back safely instead of failing with buffer errors). The returned `hash` always covers the complete file so it continues to protect edits.
 
 Pass that `hash` to the next `edit` of the same file. If anything changed in between, the edit is refused instead of overwriting code the agent has not seen.
 

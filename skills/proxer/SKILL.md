@@ -48,9 +48,9 @@ Use the shell binary when no MCP server is connected, when you need `--root` for
 ./.agents/skills/proxer/scripts/proxer index
 ```
 
-Brings `.proxer.db` in line with the project tree and prints the counts it touched: `{"status": "indexed_successfully", "refreshed": {"added": 0, "changed": 0, "removed": 0}}`. The build is incremental, so a run with nothing to do is a stat-only walk that prints three zeros. `search` does the same work before every query, so this command is optional.
+Brings `.proxer.db` in line with the project tree and prints the counts it touched: `{"status": "indexed_successfully", "refreshed": {"added": 0, "changed": 0, "removed": 0, "skipped": 0}}`. The build is incremental, so a run with nothing to do is a stat-only walk that prints all zeros. `search` does the same work before every query, so this command is optional.
 
-It skips `node_modules`, `dist`, `.next`, `.agents`, and other dependency or build directories. A project can add to that list with a `.proxer.json` at its root, e.g. `{"ignored_dirs": ["third_party", "generated"]}`: names match whole directory names at any depth and add to the defaults, and a malformed file aborts the command. Indexed files are known source and document extensions (`.go`, `.ts`, `.py`, `.rs`, `.md`, `.json`, `.yaml`, `.sql`, `.sh`, and similar), plus exact names such as `Dockerfile`, `Makefile`, and `go.mod`, up to 1 MB each.
+It skips `node_modules`, `dist`, `.next`, `.agents`, and other dependency or build directories. A project can add to that list with a `.proxer.json` at its root, e.g. `{"ignored_dirs": ["third_party", "generated"]}`: names match whole directory names at any depth and add to the defaults, and a malformed file aborts the command. Indexed files are known source and document extensions (`.go`, `.ts`, `.py`, `.rs`, `.md`, `.json`, `.yaml`, `.sql`, `.sh`, and similar), plus exact names such as `Dockerfile`, `Makefile`, and `go.mod`, up to 1 MB each. Files containing lines longer than 4,096 characters (such as minified JS bundles) are skipped at index time to prevent them from entering search results, and are reported in `skipped`.
 
 ## search
 
@@ -93,7 +93,7 @@ Results come from 60-line chunks with a 15-line overlap, so `line` is the chunk 
 ./.agents/skills/proxer/scripts/proxer read -f "internal/auth.go" -s 40 -e 70
 ```
 
-Returns `{"root": "...", "filepath": "...", "content": "...", "hash": "..."}` for the inclusive range `-s` .. `-e`. Line numbers start at 1 and match what `search` reports. The `hash` is the SHA-256 of the whole file, not just the range.
+Returns `{"root": "...", "filepath": "...", "content": "...", "hash": "..."}` for the inclusive range `-s` .. `-e`. Line numbers start at 1 and match what `search` reports. Lines exceeding 4,096 characters are truncated past that width with an explicit ` [truncated]` marker to keep payloads bounded. The `hash` is the SHA-256 of the whole file, not just the range or truncated content, so it reliably guards subsequent edits.
 
 Read the range before editing it: `edit` needs exact boundaries. Carry the `hash` into the edit so a change in between is caught.
 
@@ -119,6 +119,7 @@ The replacement does not need to match the length of the range. The whole range 
 ## Limits
 
 - Every path must stay inside the root. `read` and `edit` reject `../` and absolute paths that point at another project, because no index entry exists outside the root. Use the harness `read` or `bash` for those files.
+- Lines exceeding 4,096 characters are truncated during `read` with an explicit ` [truncated]` marker to keep payloads bounded, and files containing lines past that width are skipped at index time.
 - Files outside the indexed extensions are not searchable. Editing one works, but the change will not appear in `search`.
 - Directories on the project skip list (`.proxer.json`) are not indexed, and `edit` on a file inside one will not re-add it to the index.
 - `.proxer.db` belongs in the target project's `.gitignore`.
