@@ -308,6 +308,42 @@ func TestSearchDedupesByFile(t *testing.T) {
 	assert.Contains(t, seen, "pkg/big.go", "the many-chunked file must still be represented")
 }
 
+// TestSearchDemotesDocsAndAssets covers the ranking waste in the field report:
+// 69 markdown chunks crowded the five slots, and a minified bundle was indexed
+// and returned for `func`.
+func TestSearchDemotesDocsAndAssets(t *testing.T) {
+	root, db := newToolWorkspace(t)
+
+	files := map[string]string{
+		filepath.Join("internal", "app.go"):    "package app\n\nfunc Demoted() {}\n",
+		"NOTES.md":                             "# Demoted\n",
+		filepath.Join("static", "htmx.min.js"): "function Demoted(){}\n",
+	}
+	for name, content := range files {
+		path := filepath.Join(root, name)
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+	}
+	mustIndex(t, db, root, config.DefaultIgnoredDirs)
+
+	all := searchAll(t, db, root, "Demoted")
+	require.Len(t, all.Results, 3)
+	assert.Equal(t, []string{"internal/app.go", "NOTES.md", "static/htmx.min.js"}, resultPaths(all),
+		"the default must lead with code, then docs, then generated assets")
+
+	code := searchWith(t, db, root, "Demoted", tools.SearchOptions{Kind: "code"})
+	require.Len(t, code.Results, 1)
+	assert.Equal(t, []string{"internal/app.go"}, resultPaths(code), "kind must filter, not only reorder")
+
+	docs := searchWith(t, db, root, "Demoted", tools.SearchOptions{Kind: "docs"})
+	require.Len(t, docs.Results, 1)
+	assert.Equal(t, []string{"NOTES.md"}, resultPaths(docs))
+
+	_, err := tools.PerformSearch(db, root, "Demoted", tools.SearchOptions{Kind: "tests"})
+	require.Error(t, err, "an unknown kind must be refused, not silently treated as all")
+	assert.Contains(t, err.Error(), "invalid kind")
+}
+
 // TestSearchLimitAndTotal pins the honesty of a capped answer: the caller can
 // ask for more, sees how much matched, and is told when the list it got is not
 // everything the query found.
@@ -441,6 +477,14 @@ func searchWith(t *testing.T, db *sqlx.DB, root, keyword string, opts tools.Sear
 	var response domain.SearchResponse
 	require.NoError(t, json.Unmarshal([]byte(resultJSON), &response))
 	return response
+}
+
+func resultPaths(response domain.SearchResponse) []string {
+	out := make([]string, 0, len(response.Results))
+	for _, result := range response.Results {
+		out = append(out, result.Filepath)
+	}
+	return out
 }
 
 // mustIndex runs a delta build and fails the test if it errors. The build is

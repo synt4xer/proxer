@@ -80,6 +80,7 @@ func main() {
 
 	var keyword string
 	var limit int
+	var kind string
 	var noRefresh bool
 	var searchCmd = &cobra.Command{
 		Use:   "search",
@@ -94,6 +95,7 @@ func main() {
 				NoRefresh:   noRefresh || config.RefreshDisabled(),
 				IgnoredDirs: ignoredDirs,
 				Limit:       limit,
+				Kind:        kind,
 			})
 			if err != nil {
 				fmt.Fprintln(os.Stderr, err.Error())
@@ -104,6 +106,7 @@ func main() {
 	}
 	searchCmd.Flags().StringVarP(&keyword, "keyword", "k", "", "Keyword for FTS5 search (required)")
 	searchCmd.Flags().IntVarP(&limit, "limit", "n", 5, "Maximum number of results to return (1 to 50)")
+	searchCmd.Flags().StringVar(&kind, "kind", "all", "Which files to search: code, docs, or all (all orders code before docs before generated assets)")
 	searchCmd.Flags().BoolVar(&noRefresh, "no-refresh", false, "Query the index as it stands instead of bringing it up to date first (also PROXER_NO_REFRESH=1)")
 	searchCmd.MarkFlagRequired("keyword")
 
