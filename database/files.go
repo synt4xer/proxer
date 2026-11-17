@@ -47,7 +47,7 @@ func Files(db *sqlx.DB) (map[string]FileRecord, error) {
 // stopped seeing must not survive in either store, or the next delta would treat
 // the leftover chunks as current.
 func Remove(tx *sqlx.Tx, rel string) error {
-	if err := deleteChunks(tx, rel); err != nil {
+	if err := DeleteChunks(tx, rel); err != nil {
 		return err
 	}
 
