@@ -2,7 +2,7 @@
 
 **Proxer** is a code search, read, and edit tool for AI coding agents. It keeps a SQLite FTS5 index of a project in `.proxer.db`, so an agent can find code by keyword, read the exact line range it needs, and replace that range without rewriting the whole file.
 
-Current release: [`v0.5.0`](https://github.com/synt4xer/proxer/releases/tag/v0.5.0). The upgrade notes for a project that already ran an older Proxer are in [Upgrading from v0.3.0](#upgrading-from-v030).
+Current release: [`v0.5.0`](https://github.com/synt4xer/proxer/releases/tag/v0.5.0).
 
 ## Why Proxer
 
@@ -68,7 +68,7 @@ The database lives at `<root>/.proxer.db`, and every path in it is keyed relativ
 - **Explicit project root:** `--root`, `PROXER_ROOT`, or the working directory, in that order. The index never depends on where the process happened to start.
 - **Prefix search:** Every search term is matched as a token prefix, so `auth` reaches `AuthMiddleware` without the agent guessing full identifiers.
 - **Paths are searchable:** The match covers the file path as well as the body, and bm25 weights the path above the content, so `000001` finds `db/migrations/mysql/000001_init.up.sql`. Each result says whether it matched the path, the content, or both.
-- **Distinct, ordered results:** Five slots describe five files, code first, then documentation (`.md`, `.mdx`, `.txt`, `.rst`), then generated assets (`*.min.*`, `*.map`, lockfiles). `--kind code|docs|all` narrows the search, and `-n/--limit` raises the cap to 50.
+- **Distinct, ordered results:** Five slots describe five files, production code first, then test files (`*_test.go`, `*.test.*`, `*.spec.*`, `__tests__/`, etc.), then documentation (`.md`, `.mdx`, `.txt`, `.rst`), then generated assets (`*.min.*`, `*.map`, lockfiles). `--kind code|docs|all` narrows the search, and `-n/--limit` raises the cap to 50.
 - **Honest truncation:** `total` counts every matching chunk and `truncated` says whether the answer is smaller than the match, so a broad query is never silently cut without a number to show for it.
 - **Query sanitization:** Free-form input, including punctuation and FTS5 operators, is quoted before it reaches the parser. Natural language never triggers a syntax error.
 - **Smart defaults:** Out of the box, it skips dependency, build, and VCS directories (`.git`, `node_modules`, `dist`, `.next`, `.agents`, …) and indexes known source and document extensions plus exact names such as `Dockerfile`, `Makefile`, and `go.mod`, up to 1 MB per file. A project extends the skip list with a `.proxer.json` at its root, and the defaults always stay in force. The built-in lists live in `internal/config/config.go`.
@@ -124,39 +124,13 @@ Add the index to the target project's `.gitignore`:
 .proxer.db-wal
 ```
 
-### Upgrading from v0.3.0
-
-Two things change under an existing project, and both are handled without manual steps:
-
-- **The database is rebuilt once.** v0.4.0 stamps the schema version, the chunk window, and a per-file manifest into `.proxer.db`; a database without that stamp is cleared and reindexed on the next command instead of being extended with rows it cannot account for. The first `search` after the upgrade pays for the full build (about 2 s at 8,000 files), and every later one is a delta.
-- **`search` output is an envelope.** A script that parsed the top-level array must read `results` instead:
-
-```json
-{
-  "root": "/home/dev/code/my-awesome-project",
-  "indexed_at": "2026-11-16T04:55:12.917786Z",
-  "refreshed": {"added": 0, "changed": 0, "removed": 0},
-  "results": [{"root": "...", "filepath": "...", "line": "136-181", "snippet": "...<b>hit</b>..."}]
-}
-```
-
-`index` still prints `{"status": "indexed_successfully", "refreshed": {...}}`, and `read` and `edit` are unchanged.
-
-### Upgrading from v0.4.0
-
-v0.5.0 changes what `search` returns and what it accepts, and nothing else, so no database is rebuilt and no command has to be re-run:
-
-- **A result is a different file.** Five slots were five chunks and could be one file five times; they are now five files. Nothing else about `line` and `snippet` changed.
-- **The envelope grew.** `total` and `truncated` are new, and each result carries `match` (`path`, `content`, or `both`). A client that decodes known fields keeps working; one that rejects unknown ones must accept them.
-- **The cap is adjustable.** `-n/--limit` (default 5, clamped to 1..50) and `--kind code|docs|all` are new; `limit` and `kind` are the MCP equivalents.
-
 ## Command Reference
 
 Results are printed as JSON on stdout; failures go to stderr with a non-zero exit code. Every command accepts the global `--root <path>` flag described above; without it, the working directory is the project root.
 
 | Command | Purpose |
 | --- | --- |
-| `index` | Bring `.proxer.db` in line with the project tree, touching only new, changed, and deleted files (skipping files with lines exceeding 4,096 chars). |
+| `index` | Bring `.proxer.db` in line with the project tree, touching only new, changed, and deleted files (skipping minified/long-line blobs). |
 | `search -k <keyword> [-n <limit>] [--kind code|docs|all] [--no-refresh]` | Refresh the index, then return up to `limit` distinct files (default 5) inside `{root, indexed_at, refreshed, total, truncated, results}`. |
 | `read -f <file> -s <start> -e <end>` | Return `root`, `filepath`, the inclusive line range (truncated past 4,096 chars with ` [truncated]`), and the file `hash` as JSON. |
 | `edit -f <file> -s <start> -e <end> [--hash <hash>]` | Replace the range with stdin content, then reindex that file. |
@@ -180,7 +154,7 @@ Names match whole directory names at any depth and are added to the built-in def
 ./.agents/skills/proxer/scripts/proxer index
 ```
 
-The build is incremental, so running `index` again is cheap: files whose size and modification time still match the manifest are skipped, files whose bytes hash the same are only re-stamped, and rows for deleted paths are dropped. Files with lines longer than 4,096 characters (such as minified code or single-line bundles) are skipped at index time and counted in `skipped`, preventing generated assets from polluting search results. Nothing needs to be remembered between sessions, because `search` does the same work before every query. Run `index` only when you want to pay that cost up front, for example before a timed query or after a large `git pull`.
+The build is incremental, so running `index` again is cheap: files whose size and modification time still match the manifest are skipped, files whose bytes hash the same are only re-stamped, and rows for deleted paths are dropped. Files dominated by lines longer than 4,096 characters (such as minified code or single-line bundles) are skipped at index time and counted in `skipped`, preventing generated assets from polluting search results, while multi-line source files containing isolated long lines are indexed with those lines truncated. Nothing needs to be remembered between sessions, because `search` does the same work before every query. Run `index` only when you want to pay that cost up front, for example before a timed query or after a large `git pull`.
 
 ### Search
 
