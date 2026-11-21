@@ -360,3 +360,28 @@ func TestReindexFileSkipsLongLines(t *testing.T) {
 	require.NoError(t, db.Get(&rows, "SELECT COUNT(*) FROM indexed_files WHERE filepath = ?", "code.js"))
 	assert.Equal(t, 1, rows, "manifest row must survive to record current hash/size/mtime")
 }
+
+func TestIndexTruncatesEmbeddedLongLineInMultiLineSourceFile(t *testing.T) {
+	root := t.TempDir()
+	db := openWorkspaceDB(t, root)
+	ignored := config.DefaultIgnoredDirs
+
+	longBlob := strings.Repeat("B", config.MaxLineWidth+2000)
+	source := "package main\n\nconst embeddedAsset = \"" + longBlob + "\"\n\nfunc ImportantBusinessLogic() string {\n\treturn embeddedAsset\n}\n"
+	path := filepath.Join(root, "embed.go")
+	write(t, path, source)
+
+	refreshed := mustIndex(t, db, root, ignored)
+	assert.Equal(t, indexer.Refreshed{Added: 1}, refreshed, "multi-line source file with one long line must be indexed, not skipped")
+	assert.NotEmpty(t, chunkRowIDs(t, db, "embed.go"))
+
+	storedChunk := contentFor(t, db, "embed.go")
+	assert.Contains(t, storedChunk, "func ImportantBusinessLogic()", "surrounding code must remain searchable in FTS5")
+	assert.Contains(t, storedChunk, "const embeddedAsset = \"", "prefix of the long line must remain searchable")
+	assert.Contains(t, storedChunk, config.TruncationMarker, "oversized line must be truncated inside stored chunk")
+	assert.Less(t, len(storedChunk), config.MaxLineWidth+200, "stored chunk must stay bounded instead of storing the raw blob")
+
+	// Subsequent no-change delta build must recognize the untruncated on-disk size/mtime/hash.
+	refreshedAgain := mustIndex(t, db, root, ignored)
+	assert.True(t, refreshedAgain.Empty(), "manifest must record the real on-disk file so subsequent walks do no work: %+v", refreshedAgain)
+}

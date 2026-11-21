@@ -2,6 +2,7 @@ package indexer
 
 import (
 	"bytes"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/synt4xer/proxer/internal/config"
@@ -25,9 +26,7 @@ func TruncateLine(line string, maxWidth int) string {
 	return line
 }
 
-// HasLongLine reports whether any line in content exceeds maxWidth runes. It is
-// used by the indexer to skip minified bundles and generated single-line files
-// without pulling them into the search index.
+// HasLongLine reports whether any line in content exceeds maxWidth runes.
 func HasLongLine(content []byte, maxWidth int) bool {
 	if maxWidth <= 0 {
 		return false
@@ -59,4 +58,51 @@ func HasLongLine(content []byte, maxWidth int) bool {
 	}
 
 	return false
+}
+
+// PrepareContentForIndex inspects content for lines exceeding maxWidth runes:
+//   - If no line exceeds maxWidth, it returns string(content), true without
+//     extra allocations.
+//   - If at least half of the non-empty lines exceed maxWidth (typical of
+//     minified bundles and single-line generated blobs), it returns "", false
+//     so the file is skipped from chunk storage.
+//   - Otherwise (a multi-line source file that happens to contain a few long
+//     lines such as embedded SVGs, base64 strings, or fixtures), it truncates
+//     only the oversized lines via TruncateLine and returns the sanitized
+//     content, true so surrounding code remains searchable while keeping
+//     stored FTS5 chunks bounded.
+func PrepareContentForIndex(content []byte, maxWidth int) (string, bool) {
+	if !HasLongLine(content, maxWidth) {
+		return string(content), true
+	}
+
+	lines := strings.Split(string(content), "\n")
+	shortLines := 0
+	longLines := 0
+
+	for i, line := range lines {
+		rawLine := line
+		hasCR := false
+		if len(rawLine) > 0 && rawLine[len(rawLine)-1] == '\r' {
+			rawLine = rawLine[:len(rawLine)-1]
+			hasCR = true
+		}
+
+		if len(rawLine) > maxWidth && utf8.RuneCountInString(rawLine) > maxWidth {
+			longLines++
+			if hasCR {
+				lines[i] = TruncateLine(rawLine, maxWidth) + "\r"
+			} else {
+				lines[i] = TruncateLine(rawLine, maxWidth)
+			}
+		} else if strings.TrimSpace(rawLine) != "" {
+			shortLines++
+		}
+	}
+
+	if longLines >= shortLines {
+		return "", false
+	}
+
+	return strings.Join(lines, "\n"), true
 }

@@ -71,3 +71,43 @@ func TestHasLongLine(t *testing.T) {
 		assert.True(t, indexer.HasLongLine(content, 2))
 	})
 }
+
+func TestPrepareContentForIndex(t *testing.T) {
+	t.Run("returns content unchanged when all lines fit", func(t *testing.T) {
+		content := []byte("package main\n\nfunc Hello() {}\n")
+		out, ok := indexer.PrepareContentForIndex(content, 20)
+		assert.True(t, ok)
+		assert.Equal(t, string(content), out)
+	})
+
+	t.Run("skips single-line minified file", func(t *testing.T) {
+		content := []byte("function min(){" + strings.Repeat("a", 50) + "}\n")
+		out, ok := indexer.PrepareContentForIndex(content, 20)
+		assert.False(t, ok)
+		assert.Empty(t, out)
+	})
+
+	t.Run("skips minified file with short license header and trailing blank lines", func(t *testing.T) {
+		content := []byte("/* MIT License */\n" + strings.Repeat("a", 50) + "\n\n\n")
+		out, ok := indexer.PrepareContentForIndex(content, 20)
+		assert.False(t, ok)
+		assert.Empty(t, out)
+	})
+
+	t.Run("indexes multi-line source file and truncates only the embedded long line", func(t *testing.T) {
+		longLiteral := "const svg = \"" + strings.Repeat("x", 60) + "\""
+		content := []byte("package main\n\n" + longLiteral + "\n\nfunc ImportantBusinessLogic() {}\n")
+		out, ok := indexer.PrepareContentForIndex(content, 40)
+		assert.True(t, ok)
+		expected := "package main\n\n" + longLiteral[:40] + config.TruncationMarker + "\n\nfunc ImportantBusinessLogic() {}\n"
+		assert.Equal(t, expected, out)
+	})
+
+	t.Run("preserves CRLF endings when truncating embedded long lines", func(t *testing.T) {
+		content := []byte("line1\r\n" + strings.Repeat("z", 30) + "\r\nline3\r\n")
+		out, ok := indexer.PrepareContentForIndex(content, 10)
+		assert.True(t, ok)
+		expected := "line1\r\n" + strings.Repeat("z", 10) + config.TruncationMarker + "\r\nline3\r\n"
+		assert.Equal(t, expected, out)
+	})
+}
