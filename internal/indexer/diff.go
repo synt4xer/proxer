@@ -242,7 +242,8 @@ func storeCurrentFile(tx *sqlx.Tx, writer *database.Writer, rootPath string, ent
 	entry.Size = int64(len(content))
 	entry.Hash = ContentHash(content)
 
-	if HasLongLine(content, config.MaxLineWidth) {
+	indexContent, ok := PrepareContentForIndex(content, config.MaxLineWidth)
+	if !ok {
 		if replace {
 			if err := database.DeleteChunks(tx, entry.Path); err != nil {
 				return false, err
@@ -254,7 +255,7 @@ func storeCurrentFile(tx *sqlx.Tx, writer *database.Writer, rootPath string, ent
 		return false, nil
 	}
 
-	if err := writer.Store(entry, string(content), replace); err != nil {
+	if err := writer.Store(entry, indexContent, replace); err != nil {
 		return false, err
 	}
 	return true, nil
