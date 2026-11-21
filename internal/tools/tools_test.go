@@ -309,15 +309,17 @@ func TestSearchDedupesByFile(t *testing.T) {
 }
 
 // TestSearchDemotesDocsAndAssets covers the ranking waste in the field report:
-// 69 markdown chunks crowded the five slots, and a minified bundle was indexed
-// and returned for `func`.
+// 69 markdown chunks crowded the five slots, a minified bundle was indexed
+// and returned for `func`, and test files calling a function repeatedly
+// outranked the production file defining it.
 func TestSearchDemotesDocsAndAssets(t *testing.T) {
 	root, db := newToolWorkspace(t)
 
 	files := map[string]string{
-		filepath.Join("internal", "app.go"):    "package app\n\nfunc Demoted() {}\n",
-		"NOTES.md":                             "# Demoted\n",
-		filepath.Join("static", "htmx.min.js"): "function Demoted(){}\n",
+		filepath.Join("internal", "app.go"):      "package app\n\nfunc Demoted() {}\n",
+		filepath.Join("internal", "app_test.go"): "package app_test\n\nfunc TestDemoted() { Demoted(); Demoted(); Demoted() }\n",
+		"NOTES.md":                               "# Demoted\n",
+		filepath.Join("static", "htmx.min.js"):   "function Demoted(){}\n",
 	}
 	for name, content := range files {
 		path := filepath.Join(root, name)
@@ -327,13 +329,14 @@ func TestSearchDemotesDocsAndAssets(t *testing.T) {
 	mustIndex(t, db, root, config.DefaultIgnoredDirs)
 
 	all := searchAll(t, db, root, "Demoted")
-	require.Len(t, all.Results, 3)
-	assert.Equal(t, []string{"internal/app.go", "NOTES.md", "static/htmx.min.js"}, resultPaths(all),
-		"the default must lead with code, then docs, then generated assets")
+	require.Len(t, all.Results, 4)
+	assert.Equal(t, []string{"internal/app.go", "internal/app_test.go", "NOTES.md", "static/htmx.min.js"}, resultPaths(all),
+		"the default must lead with production code, then tests, then docs, then generated assets")
 
 	code := searchWith(t, db, root, "Demoted", tools.SearchOptions{Kind: "code"})
-	require.Len(t, code.Results, 1)
-	assert.Equal(t, []string{"internal/app.go"}, resultPaths(code), "kind must filter, not only reorder")
+	require.Len(t, code.Results, 2)
+	assert.Equal(t, []string{"internal/app.go", "internal/app_test.go"}, resultPaths(code),
+		"kind=code must filter out docs/assets while ranking production code before tests")
 
 	docs := searchWith(t, db, root, "Demoted", tools.SearchOptions{Kind: "docs"})
 	require.Len(t, docs.Results, 1)
@@ -609,10 +612,49 @@ func TestPerformReadLongLines(t *testing.T) {
 		assert.Less(t, len(result.Content), hundredKB/10, "read payload must be bounded, not 100 KB")
 		assert.Equal(t, indexer.ContentHash([]byte(longLine)), result.Hash, "hash must cover the full file")
 
-		// The returned hash guards edit: an edit using this hash must succeed.
-		editRes, err := tools.PerformEdit(db, root, "longline.txt", 1, 1, "short", result.Hash, config.DefaultIgnoredDirs)
+		// Round-tripping the truncated read output into edit must be rejected so the
+		// file is not silently overwritten with truncated content.
+		_, err = tools.PerformEdit(db, root, "longline.txt", 1, 1, result.Content, result.Hash, config.DefaultIgnoredDirs)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), config.TruncationMarker)
+
+		// Even without the marker in newContent, overwriting a line that exceeded
+		// MaxLineWidth (and therefore could not be seen in full via read) is refused.
+		_, err = tools.PerformEdit(db, root, "longline.txt", 1, 1, "short", result.Hash, config.DefaultIgnoredDirs)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "exceeds")
+
+		onDisk, readErr := os.ReadFile(longPath)
+		require.NoError(t, readErr)
+		assert.Equal(t, longLine, string(onDisk), "rejected edits must leave the original 100 KB file untouched")
+	})
+
+	t.Run("truncated read hash still guards edits to normal lines in the same file", func(t *testing.T) {
+		mixedContent := "package main\n" + longLine + "\nfunc Normal() {}\n"
+		mixedPath := filepath.Join(root, "mixed.go")
+		require.NoError(t, os.WriteFile(mixedPath, []byte(mixedContent), 0o644))
+
+		resultJSON, err := tools.PerformRead(root, "mixed.go", 1, 3)
+		require.NoError(t, err)
+
+		var result domain.ReadResultJSON
+		require.NoError(t, json.Unmarshal([]byte(resultJSON), &result))
+		assert.Contains(t, result.Content, config.TruncationMarker)
+
+		// Editing a range that spans the long line (line 2) is refused.
+		_, err = tools.PerformEdit(db, root, "mixed.go", 1, 2, "package main\nshort", result.Hash, config.DefaultIgnoredDirs)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "line 2 exceeds")
+
+		// Editing a normal line (line 3) using the hash from the truncated read succeeds
+		// and preserves the untruncated 100 KB line 2 intact.
+		editRes, err := tools.PerformEdit(db, root, "mixed.go", 3, 3, "func Updated() {}", result.Hash, config.DefaultIgnoredDirs)
 		require.NoError(t, err)
 		assert.Contains(t, editRes, "success")
+
+		onDisk, readErr := os.ReadFile(mixedPath)
+		require.NoError(t, readErr)
+		assert.Equal(t, "package main\n"+longLine+"\nfunc Updated() {}\n", string(onDisk))
 	})
 
 	t.Run("minified bundle with 50KB line returns truncated output", func(t *testing.T) {

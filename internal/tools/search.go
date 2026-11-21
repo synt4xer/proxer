@@ -177,12 +177,15 @@ func PerformSearch(db *sqlx.DB, root, keyword string, opts SearchOptions) (strin
 	// file, so a full window can hold no code at all. Ask once more with
 	// documentation excluded; on a tree where the kinds are interleaved the
 	// ordinary query already answered and this costs nothing.
-	if kind == kindAll && len(candidates) == window && len(partitionByKind(eligible)[kindCode]) == 0 {
-		hidden, err := rankedCandidates(db, excludeDocs(matchQuery), window)
-		if err != nil {
-			return "", err
+	if kind == kindAll && len(candidates) == window {
+		parts := partitionByKind(eligible)
+		if len(parts[kindCode]) == 0 && len(parts[kindTest]) == 0 {
+			hidden, err := rankedCandidates(db, excludeDocs(matchQuery), window)
+			if err != nil {
+				return "", err
+			}
+			eligible = append(filterKind(dedupeByFile(hidden), kindCode), eligible...)
 		}
-		eligible = append(filterKind(dedupeByFile(hidden), kindCode), eligible...)
 	}
 
 	// A window that was cut short may hide files, and a slice that was capped
