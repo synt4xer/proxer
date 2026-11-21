@@ -5,8 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/jmoiron/sqlx"
+	"github.com/synt4xer/proxer/internal/config"
 	"github.com/synt4xer/proxer/internal/indexer"
 )
 
@@ -43,6 +45,17 @@ func PerformEdit(db *sqlx.DB, root, path string, startLine, endLine int, newCont
 
 	if startLine < 1 || startLine > totalLines || endLine < startLine || endLine > totalLines {
 		return "", fmt.Errorf("invalid line range. The file has %d lines", totalLines)
+	}
+
+	if strings.Contains(newContent, config.TruncationMarker) {
+		return "", fmt.Errorf("refusing to edit '%s': replacement content contains truncation marker %q", path, config.TruncationMarker)
+	}
+
+	for i := startLine; i <= endLine; i++ {
+		line := strings.TrimSuffix(lines[i-1], "\r")
+		if len(line) > config.MaxLineWidth && utf8.RuneCountInString(line) > config.MaxLineWidth {
+			return "", fmt.Errorf("refusing to edit '%s': line %d exceeds %d characters and is truncated by read", path, i, config.MaxLineWidth)
+		}
 	}
 
 	prefix := lines[:startLine-1]
