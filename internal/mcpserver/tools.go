@@ -21,7 +21,7 @@ type indexOutput struct {
 type searchInput struct {
 	Keyword string `json:"keyword" jsonschema:"terms to search for; each term matches as a token prefix and multiple terms are OR-ed"`
 	Limit   int    `json:"limit,omitempty" jsonschema:"maximum number of results to return, clamped to 1..50 (default 5)"`
-	Kind    string `json:"kind,omitempty" jsonschema:"which files to search: code, docs, or all (default all, which orders code before docs before generated assets)"`
+	Kind    string `json:"kind,omitempty" jsonschema:"which files to search: code, docs, or all (default all, which orders production code before test files before docs before generated assets)"`
 }
 
 type readInput struct {
@@ -83,7 +83,7 @@ func (s *Server) addSearchTool() {
 			"Before querying it brings the index up to date, so files changed by other tools are found without calling index first. " +
 			"Returns the absolute project root, the indexed_at timestamp of the last index change, the refreshed counts for this call, " +
 			"the total number of matching chunks, whether the result list was truncated, and up to `limit` results (default 5), " +
-			"ordered code first, then documentation, then generated assets unless `kind` narrows it. " +
+			"ordered production code first, then test files, then documentation, then generated assets unless `kind` narrows it. " +
 			"Each result carries a filepath relative to that root, a line range, a snippet where matches are wrapped in <b> tags, " +
 			"and whether its terms matched the path, the content, or both. " +
 			"Empty or punctuation-only input returns no matches.",
@@ -114,7 +114,7 @@ func (s *Server) addReadTool() {
 		Name: "read",
 		Description: "Read an inclusive line range from a file. The filepath is relative to the project root; " +
 			"absolute paths inside the root are accepted and paths outside it are rejected. " +
-			"Returns the absolute project root, the filepath as given, the requested lines (each terminated by a newline), " +
+			"Returns the absolute project root, the filepath as given, the requested lines (each terminated by a newline; lines exceeding 4096 characters are truncated with \" [truncated]\"), " +
 			"and a hash of the file. Pass that hash to edit so a change between the read and the edit is refused.",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in readInput) (*mcp.CallToolResult, domain.ReadResultJSON, error) {
 		start, end := in.Start, in.End
@@ -144,7 +144,8 @@ func (s *Server) addEditTool() {
 		Description: "Replace an inclusive line range in a file and reindex the file. The filepath is relative to the project root; " +
 			"absolute paths inside the root are accepted and paths outside it are rejected. " +
 			"The replacement need not have the same number of lines as the range. The file is written atomically. " +
-			"Pass the hash from a prior read of the same file: if the file changed since that read, the edit is rejected and nothing is written.",
+			"Pass the hash from a prior read of the same file: if the file changed since that read, the edit is rejected and nothing is written. " +
+			"Replacements containing the \" [truncated]\" marker or targeting lines exceeding 4096 characters are also rejected.",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in editInput) (*mcp.CallToolResult, editOutput, error) {
 		resultJSON, err := tools.PerformEdit(s.db, s.root, in.Filepath, in.Start, in.End, in.Content, in.Hash, s.ignoredDirs)
 		if err != nil {

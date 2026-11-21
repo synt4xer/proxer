@@ -73,7 +73,7 @@ Returns an envelope:
 
 `results` holds at most `--limit` files, one per file: `root` is the absolute path of the indexed project, `line` is `"start-end"`, `snippet` wraps the matched text in `<b>`, and `match` is `path`, `content`, or `both`. `indexed_at` is when the index last changed. `refreshed` counts what this call added, changed, and removed; all zero means the index was already current. `total` counts every matching chunk and `truncated` says whether more matched than `results` holds, so a broad query is never silently cut.
 
-`-n/--limit` asks for more files (default 5, clamped to 1..50). `--kind code|docs|all` filters by class: `all` is the default and returns code first, then documentation (`.md`, `.mdx`, `.txt`, `.rst`), then generated assets (`*.min.*`, `*.map`, lockfiles). Use `--kind code` when a docs-heavy tree answers a code question with prose.
+`-n/--limit` asks for more files (default 5, clamped to 1..50). `--kind code|docs|all` filters by class: `all` is the default and returns production code first, then test files (`*_test.go`, `*.test.*`, `*.spec.*`, `__tests__/`, etc.), then documentation (`.md`, `.mdx`, `.txt`, `.rst`), then generated assets (`*.min.*`, `*.map`, lockfiles). Use `--kind code` (which keeps production code first, then tests) when a docs-heavy tree answers a code question with prose.
 
 Add `--no-refresh` (or set `PROXER_NO_REFRESH=1`) to query the index as it stands. Then `refreshed` is absent and a file changed since the last build stays invisible, which is only what you want for a pinned snapshot or a read-only mount.
 
@@ -109,7 +109,7 @@ EOF
 
 Replaces lines `-s` .. `-e` (inclusive) with the content read from stdin, then re-indexes **only that file**. Other files keep their existing index entries, so the command stays fast no matter how large the project is. Trailing newlines in the replacement are trimmed, so do not add a blank line at the end of the block.
 
-Pass the `hash` from the read as `--hash` (or the `hash` argument over MCP). If the file changed after that read, `edit` exits non-zero and writes nothing, so a stale range can never overwrite code you have not seen. Omitting `--hash` keeps the old behavior.
+Pass the `hash` from the read as `--hash` (or the `hash` argument over MCP). If the file changed after that read, `edit` exits non-zero and writes nothing, so a stale range can never overwrite code you have not seen. Omitting `--hash` keeps the old behavior. Ranges containing lines longer than 4,096 characters (which `read` truncates with ` [truncated]`) and replacement content containing ` [truncated]` are refused so a truncated read can never silently corrupt a file; normal lines in the same file can still be edited.
 
 The replacement does not need to match the length of the range. The whole range is always consumed:
 
@@ -119,7 +119,7 @@ The replacement does not need to match the length of the range. The whole range 
 ## Limits
 
 - Every path must stay inside the root. `read` and `edit` reject `../` and absolute paths that point at another project, because no index entry exists outside the root. Use the harness `read` or `bash` for those files.
-- Lines exceeding 4,096 characters are truncated during `read` with an explicit ` [truncated]` marker to keep payloads bounded, and files containing lines past that width are skipped at index time.
+- Lines exceeding 4,096 characters are truncated during `read` with an explicit ` [truncated]` marker to keep payloads bounded. At index time, files dominated by long lines (such as minified bundles or single-line blobs) are skipped, whereas multi-line source files with isolated long lines are indexed with only those oversized lines truncated.
 - Files outside the indexed extensions are not searchable. Editing one works, but the change will not appear in `search`.
 - Directories on the project skip list (`.proxer.json`) are not indexed, and `edit` on a file inside one will not re-add it to the index.
 - `.proxer.db` belongs in the target project's `.gitignore`.
