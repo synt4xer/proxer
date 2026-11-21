@@ -17,12 +17,14 @@ type fileKind int
 
 const (
 	kindCode fileKind = iota
+	kindTest
 	kindDocs
 	kindAssets
 )
 
-// kindAll keeps every kind in the demotion order: code, then docs, then assets.
-// It is a filter value rather than a fileKind because no file is "all kinds".
+// kindAll keeps every kind in the demotion order: production code, then tests,
+// then docs, then assets. It is a filter value rather than a fileKind because
+// no file is "all kinds".
 const kindAll = fileKind(-1)
 
 var docExtensions = map[string]struct{}{
@@ -51,7 +53,8 @@ var assetLockfiles = map[string]struct{}{
 
 // classifyPath sorts a result path into the demotion order. It reads the path
 // only, because the body is not available at query time and the path rules
-// already cover the file the field report hit (static/htmx.min.js).
+// already cover the file the field report hit (static/htmx.min.js) as well as
+// test files that would otherwise outrank the symbol they test.
 func classifyPath(filePath string) fileKind {
 	base := strings.ToLower(filepath.Base(filePath))
 
@@ -64,7 +67,27 @@ func classifyPath(filePath string) fileKind {
 	if _, ok := docExtensions[strings.ToLower(filepath.Ext(base))]; ok {
 		return kindDocs
 	}
+	if isTestPath(filePath, base) {
+		return kindTest
+	}
 	return kindCode
+}
+
+// isTestPath reports whether a non-asset, non-doc file is a test file so that
+// production definitions lead before test call sites.
+func isTestPath(filePath, lowerBase string) bool {
+	if strings.HasSuffix(lowerBase, "_test.go") ||
+		strings.HasSuffix(lowerBase, "_test.py") ||
+		strings.HasSuffix(lowerBase, "_test.rs") ||
+		strings.HasSuffix(lowerBase, "_spec.rb") ||
+		(strings.HasPrefix(lowerBase, "test_") && strings.HasSuffix(lowerBase, ".py")) {
+		return true
+	}
+	if strings.Contains(lowerBase, ".test.") || strings.Contains(lowerBase, ".spec.") {
+		return true
+	}
+	slashPath := "/" + filepath.ToSlash(strings.ToLower(filePath))
+	return strings.Contains(slashPath, "/__tests__/")
 }
 
 // parseKind turns a caller's --kind value into a filter. An empty value is the
@@ -103,8 +126,8 @@ func excludeDocs(matchQuery string) string {
 
 // partitionByKind groups candidates by demotion class, keeping the order they
 // were ranked in inside each group.
-func partitionByKind(candidates []domain.SearchResultDB) [3][]domain.SearchResultDB {
-	var groups [3][]domain.SearchResultDB
+func partitionByKind(candidates []domain.SearchResultDB) [4][]domain.SearchResultDB {
+	var groups [4][]domain.SearchResultDB
 	for _, candidate := range candidates {
 		k := classifyPath(candidate.Filepath)
 		groups[k] = append(groups[k], candidate)
@@ -112,8 +135,18 @@ func partitionByKind(candidates []domain.SearchResultDB) [3][]domain.SearchResul
 	return groups
 }
 
-// filterKind drops every candidate that is not of kind.
+// filterKind drops every candidate that is not of kind. When kind is kindCode,
+// both production code and test files are kept (with production code ordered
+// before test files) so an explicit --kind code still finds tests while ranking
+// production definitions first.
 func filterKind(candidates []domain.SearchResultDB, kind fileKind) []domain.SearchResultDB {
+	if kind == kindCode {
+		groups := partitionByKind(candidates)
+		kept := make([]domain.SearchResultDB, 0, len(groups[kindCode])+len(groups[kindTest]))
+		kept = append(kept, groups[kindCode]...)
+		kept = append(kept, groups[kindTest]...)
+		return kept
+	}
 	kept := candidates[:0]
 	for _, candidate := range candidates {
 		if classifyPath(candidate.Filepath) == kind {
@@ -123,10 +156,11 @@ func filterKind(candidates []domain.SearchResultDB, kind fileKind) []domain.Sear
 	return kept
 }
 
-// orderByKind filters and orders candidates so the scarce slots describe code
-// before documentation and documentation before generated assets. With kindAll
-// every group survives, in that order; with a specific kind the others are
-// dropped, which is the escape hatch for a question that really is about docs.
+// orderByKind filters and orders candidates so the scarce slots describe
+// production code before tests, tests before documentation, and documentation
+// before generated assets. With kindAll every group survives, in that order;
+// with a specific kind the others are dropped, which is the escape hatch for a
+// question that really is about docs.
 func orderByKind(candidates []domain.SearchResultDB, kind fileKind) []domain.SearchResultDB {
 	if kind != kindAll {
 		return filterKind(candidates, kind)
