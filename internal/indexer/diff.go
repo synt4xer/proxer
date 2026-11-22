@@ -269,7 +269,7 @@ func storeCurrentFile(tx *sqlx.Tx, writer *database.Writer, rootPath string, ent
 		entry.Hash = ContentHash(content)
 	}
 
-	indexContent, ok := PrepareContentForIndex(content, config.MaxLineWidth)
+	lines, ok := PrepareContentForIndex(content, config.MaxLineWidth)
 	if !ok {
 		if replace {
 			if err := database.DeleteChunks(tx, entry.Path); err != nil {
@@ -282,7 +282,7 @@ func storeCurrentFile(tx *sqlx.Tx, writer *database.Writer, rootPath string, ent
 		return false, nil
 	}
 
-	if err := writer.Store(entry, indexContent, replace); err != nil {
+	if err := writer.StoreLines(entry, lines, replace); err != nil {
 		return false, err
 	}
 	return true, nil

@@ -61,19 +61,19 @@ func HasLongLine(content []byte, maxWidth int) bool {
 }
 
 // PrepareContentForIndex inspects content for lines exceeding maxWidth runes:
-//   - If no line exceeds maxWidth, it returns string(content), true without
-//     extra allocations.
+//   - If no line exceeds maxWidth, it returns the split lines, true without
+//     joining and re-splitting.
 //   - If at least half of the non-empty lines exceed maxWidth (typical of
-//     minified bundles and single-line generated blobs), it returns "", false
+//     minified bundles and single-line generated blobs), it returns nil, false
 //     so the file is skipped from chunk storage.
 //   - Otherwise (a multi-line source file that happens to contain a few long
 //     lines such as embedded SVGs, base64 strings, or fixtures), it truncates
 //     only the oversized lines via TruncateLine and returns the sanitized
-//     content, true so surrounding code remains searchable while keeping
+//     lines, true so surrounding code remains searchable while keeping
 //     stored FTS5 chunks bounded.
-func PrepareContentForIndex(content []byte, maxWidth int) (string, bool) {
+func PrepareContentForIndex(content []byte, maxWidth int) ([]string, bool) {
 	if !HasLongLine(content, maxWidth) {
-		return string(content), true
+		return strings.Split(string(content), "\n"), true
 	}
 
 	lines := strings.Split(string(content), "\n")
@@ -101,8 +101,8 @@ func PrepareContentForIndex(content []byte, maxWidth int) (string, bool) {
 	}
 
 	if longLines >= shortLines {
-		return "", false
+		return nil, false
 	}
 
-	return strings.Join(lines, "\n"), true
+	return lines, true
 }
