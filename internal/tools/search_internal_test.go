@@ -146,3 +146,17 @@ func TestClampLimitAndCandidateWindow(t *testing.T) {
 		assert.Equal(t, tt.window, candidateWindow(clampLimit(tt.limit)), "limit %d", tt.limit)
 	}
 }
+
+func TestBuildMatchQueries(t *testing.T) {
+	andQ, orQ, multi, ok := buildMatchQueries("AuthMiddleware")
+	assert.True(t, ok)
+	assert.False(t, multi)
+	assert.Equal(t, `"AuthMiddleware"*`, andQ)
+	assert.Equal(t, `"AuthMiddleware"*`, orQ)
+
+	andQ, orQ, multi, ok = buildMatchQueries("auth middleware token")
+	assert.True(t, ok)
+	assert.True(t, multi)
+	assert.Equal(t, `"auth"* AND "middleware"* AND "token"*`, andQ)
+	assert.Equal(t, `"auth"* OR "middleware"* OR "token"*`, orQ)
+}

@@ -3,6 +3,7 @@ package tools
 import (
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/synt4xer/proxer/internal/domain"
@@ -135,19 +136,53 @@ func partitionByKind(candidates []domain.SearchResultDB) [4][]domain.SearchResul
 	return groups
 }
 
+func kindMultiplier(kind fileKind) float64 {
+	switch kind {
+	case kindCode:
+		return 1.0
+	case kindTest:
+		return 0.6
+	case kindDocs:
+		return 0.35
+	case kindAssets:
+		return 0.1
+	default:
+		return 1.0
+	}
+}
+
+func sortBySoftKindScore(candidates []domain.SearchResultDB) []domain.SearchResultDB {
+	ordered := make([]domain.SearchResultDB, len(candidates))
+	copy(ordered, candidates)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		ki := classifyPath(ordered[i].Filepath)
+		kj := classifyPath(ordered[j].Filepath)
+		si := ordered[i].Score * kindMultiplier(ki)
+		sj := ordered[j].Score * kindMultiplier(kj)
+		if si != sj {
+			return si < sj
+		}
+		return ki < kj
+	})
+	return ordered
+}
+
 // filterKind drops every candidate that is not of kind. When kind is kindCode,
-// both production code and test files are kept (with production code ordered
-// before test files) so an explicit --kind code still finds tests while ranking
-// production definitions first.
+// both production code and test files are kept and ranked with soft kind
+// multipliers so an explicit --kind code still finds tests while preferring
+// production definitions on equal matches.
 func filterKind(candidates []domain.SearchResultDB, kind fileKind) []domain.SearchResultDB {
 	if kind == kindCode {
-		groups := partitionByKind(candidates)
-		kept := make([]domain.SearchResultDB, 0, len(groups[kindCode])+len(groups[kindTest]))
-		kept = append(kept, groups[kindCode]...)
-		kept = append(kept, groups[kindTest]...)
-		return kept
+		kept := make([]domain.SearchResultDB, 0, len(candidates))
+		for _, candidate := range candidates {
+			k := classifyPath(candidate.Filepath)
+			if k == kindCode || k == kindTest {
+				kept = append(kept, candidate)
+			}
+		}
+		return sortBySoftKindScore(kept)
 	}
-	kept := candidates[:0]
+	kept := make([]domain.SearchResultDB, 0, len(candidates))
 	for _, candidate := range candidates {
 		if classifyPath(candidate.Filepath) == kind {
 			kept = append(kept, candidate)
@@ -156,20 +191,13 @@ func filterKind(candidates []domain.SearchResultDB, kind fileKind) []domain.Sear
 	return kept
 }
 
-// orderByKind filters and orders candidates so the scarce slots describe
-// production code before tests, tests before documentation, and documentation
-// before generated assets. With kindAll every group survives, in that order;
-// with a specific kind the others are dropped, which is the escape hatch for a
-// question that really is about docs.
+// orderByKind filters and orders candidates using soft BM25 multipliers
+// (Code 1.0x, Test 0.6x, Docs 0.35x, Assets 0.1x) when kindAll is used, so
+// strong exact matches in tests or docs can outrank weak 1-token code noise
+// while preserving code-first preference on equal matches.
 func orderByKind(candidates []domain.SearchResultDB, kind fileKind) []domain.SearchResultDB {
 	if kind != kindAll {
 		return filterKind(candidates, kind)
 	}
-
-	groups := partitionByKind(candidates)
-	ordered := make([]domain.SearchResultDB, 0, len(candidates))
-	for _, group := range groups {
-		ordered = append(ordered, group...)
-	}
-	return ordered
+	return sortBySoftKindScore(candidates)
 }
