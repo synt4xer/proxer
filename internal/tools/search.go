@@ -18,6 +18,10 @@ const (
 	// maxLimit bounds what a caller may ask for. A wider answer stops being a
 	// locator and becomes the raw scan the tool exists to replace.
 	maxLimit = 50
+	// defaultMaxPerFile keeps search slots focused on distinct files by default.
+	defaultMaxPerFile = 1
+	// maxChunksPerFile caps how many non-overlapping chunks one file can take.
+	maxChunksPerFile = 5
 	// candidateWindowFactor widens the ranked window beyond the requested
 	// limit, so dedupe and demotion still have candidates left once the cap
 	// applies. Ranking cost is dominated by the match, not the width, so the
@@ -42,6 +46,16 @@ func clampLimit(limit int) int {
 		return maxLimit
 	}
 	return limit
+}
+
+func clampMaxPerFile(maxPerFile int) int {
+	switch {
+	case maxPerFile <= 0:
+		return defaultMaxPerFile
+	case maxPerFile > maxChunksPerFile:
+		return maxChunksPerFile
+	}
+	return maxPerFile
 }
 
 // candidateWindow is how many ranked chunks the query fetches for limit results
@@ -108,6 +122,7 @@ type SearchOptions struct {
 	IgnoredDirs []string
 	Limit       int
 	Kind        string
+	MaxPerFile  int
 }
 
 // PerformSearch answers a keyword query from the index. Unless the caller opts
@@ -152,9 +167,10 @@ func PerformSearch(db *sqlx.DB, root, keyword string, opts SearchOptions) (domai
 	}
 
 	limit := clampLimit(opts.Limit)
+	maxPerFile := clampMaxPerFile(opts.MaxPerFile)
 	window := candidateWindow(limit)
 
-	candidates, total, err := fetchCandidates(db, andQuery, orQuery, multiTerm, kind, limit, window)
+	candidates, total, err := fetchCandidates(db, andQuery, orQuery, multiTerm, kind, limit, maxPerFile, window)
 	if err != nil {
 		return domain.SearchResponse{}, err
 	}
@@ -174,7 +190,7 @@ func PerformSearch(db *sqlx.DB, root, keyword string, opts SearchOptions) (domai
 			if err != nil {
 				return domain.SearchResponse{}, err
 			}
-			eligible = append(filterKind(dedupeByFile(hidden), kindCode), eligible...)
+			eligible = append(filterKind(dedupeByFile(hidden, maxPerFile), kindCode), eligible...)
 		}
 	}
 
@@ -214,7 +230,7 @@ func applyKindQuery(matchQuery string, kind fileKind) string {
 // fetchCandidates runs AND-first for multi-term queries so co-occurring matches
 // rank first without single-token noise flooding, falling back to OR only when
 // AND returns fewer unique files than limit.
-func fetchCandidates(db *sqlx.DB, andQuery, orQuery string, multiTerm bool, kind fileKind, limit, window int) ([]domain.SearchResultDB, int, error) {
+func fetchCandidates(db *sqlx.DB, andQuery, orQuery string, multiTerm bool, kind fileKind, limit, maxPerFile, window int) ([]domain.SearchResultDB, int, error) {
 	if !multiTerm {
 		candidates, err := rankedCandidates(db, applyKindQuery(orQuery, kind), window)
 		if err != nil {
@@ -224,14 +240,14 @@ func fetchCandidates(db *sqlx.DB, andQuery, orQuery string, multiTerm bool, kind
 		if len(candidates) > 0 {
 			total = candidates[0].Total
 		}
-		return orderByKind(dedupeByFile(candidates), kind), total, nil
+		return orderByKind(dedupeByFile(candidates, maxPerFile), kind), total, nil
 	}
 
 	andCandidates, err := rankedCandidates(db, applyKindQuery(andQuery, kind), window)
 	if err != nil {
 		return nil, 0, err
 	}
-	andOrdered := orderByKind(dedupeByFile(andCandidates), kind)
+	andOrdered := orderByKind(dedupeByFile(andCandidates, maxPerFile), kind)
 	if len(andOrdered) >= limit {
 		return andOrdered, andCandidates[0].Total, nil
 	}
@@ -244,21 +260,22 @@ func fetchCandidates(db *sqlx.DB, andQuery, orQuery string, multiTerm bool, kind
 	if len(orCandidates) > 0 {
 		total = orCandidates[0].Total
 	}
-	orOrdered := orderByKind(dedupeByFile(orCandidates), kind)
+	orOrdered := orderByKind(dedupeByFile(orCandidates, maxPerFile), kind)
 	if len(andOrdered) == 0 {
 		return orOrdered, total, nil
 	}
 
-	seen := make(map[string]struct{}, len(andOrdered))
+	kept := make(map[string][]domain.SearchResultDB, len(andOrdered))
 	for _, r := range andOrdered {
-		seen[r.Filepath] = struct{}{}
+		kept[r.Filepath] = append(kept[r.Filepath], r)
 	}
 	merged := make([]domain.SearchResultDB, len(andOrdered), len(andOrdered)+len(orOrdered))
 	copy(merged, andOrdered)
 	for _, r := range orOrdered {
-		if _, ok := seen[r.Filepath]; ok {
+		if !canAcceptChunk(kept[r.Filepath], r, maxPerFile) {
 			continue
 		}
+		kept[r.Filepath] = append(kept[r.Filepath], r)
 		merged = append(merged, r)
 	}
 	return merged, total, nil
@@ -292,21 +309,33 @@ func rankedCandidates(db *sqlx.DB, matchQuery string, window int) ([]domain.Sear
 	return results, nil
 }
 
-// dedupeByFile keeps the best-ranked chunk of each file. The query is already
-// ordered by bm25(), so the first chunk seen for a path is the one worth
-// returning, and the cap then describes files instead of spending several slots
-// on one file that matched in several places.
-func dedupeByFile(candidates []domain.SearchResultDB) []domain.SearchResultDB {
-	seen := make(map[string]struct{}, len(candidates))
+// dedupeByFile keeps up to maxPerFile non-overlapping best-ranked chunks per
+// file. The query is already ordered by bm25(), so the earliest chunks seen
+// for a path are the highest-ranked ones, and requiring non-overlapping line
+// ranges avoids returning two adjacent slices of the same hit.
+func dedupeByFile(candidates []domain.SearchResultDB, maxPerFile int) []domain.SearchResultDB {
+	kept := make(map[string][]domain.SearchResultDB, len(candidates))
 	unique := candidates[:0]
 	for _, candidate := range candidates {
-		if _, ok := seen[candidate.Filepath]; ok {
+		if !canAcceptChunk(kept[candidate.Filepath], candidate, maxPerFile) {
 			continue
 		}
-		seen[candidate.Filepath] = struct{}{}
+		kept[candidate.Filepath] = append(kept[candidate.Filepath], candidate)
 		unique = append(unique, candidate)
 	}
 	return unique
+}
+
+func canAcceptChunk(existing []domain.SearchResultDB, candidate domain.SearchResultDB, maxPerFile int) bool {
+	if len(existing) >= maxPerFile {
+		return false
+	}
+	for _, prev := range existing {
+		if candidate.StartLine <= prev.EndLine && candidate.EndLine >= prev.StartLine {
+			return false
+		}
+	}
+	return true
 }
 
 // matchPart reports where the terms landed: in the file's path, in its content,

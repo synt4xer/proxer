@@ -712,3 +712,31 @@ func TestPerformSearchPriority2RankingAndSubtokens(t *testing.T) {
 		assert.Equal(t, "weak.go", res.Results[1].Filepath)
 	})
 }
+
+func TestSearchMaxPerFileReturnsNonOverlappingChunks(t *testing.T) {
+	root, db := newToolWorkspace(t)
+
+	// Write a 180-line file with distinct target regions near line 10 and line 150
+	// so two chunks match without overlapping.
+	lines := make([]string, 180)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("var filler%d = %d", i+1, i+1)
+	}
+	lines[10] = "func handleSpecialTokenAlpha() {}"
+	lines[150] = "func handleSpecialTokenBeta() {}"
+
+	require.NoError(t, os.WriteFile(filepath.Join(root, "large.go"), []byte(strings.Join(lines, "\n")), 0o644))
+	mustIndex(t, db, root, config.DefaultIgnoredDirs)
+
+	defaultRes, err := tools.PerformSearch(db, root, "handleSpecialToken", tools.SearchOptions{NoRefresh: true})
+	require.NoError(t, err)
+	require.Len(t, defaultRes.Results, 1, "default MaxPerFile must return 1 hit per file")
+
+	multiRes, err := tools.PerformSearch(db, root, "handleSpecialToken", tools.SearchOptions{
+		NoRefresh:  true,
+		MaxPerFile: 2,
+	})
+	require.NoError(t, err)
+	require.Len(t, multiRes.Results, 2, "MaxPerFile=2 should surface both non-overlapping regions")
+	assert.NotEqual(t, multiRes.Results[0].Line, multiRes.Results[1].Line)
+}
