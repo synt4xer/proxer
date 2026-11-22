@@ -18,7 +18,7 @@ type indexOutput struct {
 }
 
 type searchInput struct {
-	Keyword    string `json:"keyword" jsonschema:"terms to search for; each term matches as a token prefix and multiple terms are OR-ed"`
+	Keyword    string `json:"keyword" jsonschema:"terms to search for; each term matches as a token prefix (and camelCase sub-tokens on code/config), using AND-first with OR fallback"`
 	Limit      int    `json:"limit,omitempty" jsonschema:"maximum number of results to return, clamped to 1..50 (default 5)"`
 	Kind       string `json:"kind,omitempty" jsonschema:"which files to search: code, docs, or all (default all, which orders production code before test files before docs before generated assets)"`
 	MaxPerFile int    `json:"max_per_file,omitempty" jsonschema:"maximum non-overlapping chunks returned per file, clamped to 1..5 (default 1)"`
@@ -72,9 +72,9 @@ func (s *Server) addIndexTool() {
 func (s *Server) addSearchTool() {
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name: "search",
-		Description: "Search the full-text index. Every term matches as a token prefix and multiple terms are OR-ed. " +
+		Description: "Search the full-text index. Every term matches as a token prefix and multiple terms run AND-first with OR fallback. " +
 			"Terms are matched against file paths as well as content, so a token that only names a file still finds it. " +
-			"camelCase is not split, so 'auth' reaches 'AuthMiddleware' but 'middleware' does not. " +
+			"On code and config files, camelCase and PascalCase identifiers are also sub-tokenized (3+ chars), so both 'auth' and 'middleware' reach 'AuthMiddleware'. " +
 			"Before querying it brings the index up to date, so files changed by other tools are found without calling index first. " +
 			"Returns the absolute project root, the indexed_at timestamp of the last index change, the refreshed counts for this call, " +
 			"the total number of matching chunks, whether the result list was truncated, and up to `limit` results (default 5), " +

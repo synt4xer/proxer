@@ -28,7 +28,7 @@ Each command prints JSON on stdout. Failures print to stderr and exit non-zero, 
 If the harness has a `proxer` MCP server connected, prefer its tools over the shell binary. They return the same JSON without shell quoting, and `edit` takes the replacement as an argument instead of stdin. The tools are named `mcp__proxer__<tool>`:
 
 - `mcp__proxer__index` — no arguments.
-- `mcp__proxer__search` — `{"keyword": "..."}`, optionally `"limit"` (1..50, default 5) and `"kind"` (`code`, `docs`, or `all`). Refreshes the index first, like the CLI.
+- `mcp__proxer__search` — `{"keyword": "..."}`, optionally `"limit"` (1..50, default 5), `"max_per_file"` (1..5, default 1), and `"kind"` (`code`, `docs`, or `all`). Refreshes the index first, like the CLI.
 - `mcp__proxer__read` — `{"filepath": "...", "start": 40, "end": 70}`; `start` defaults to 1 and `end` to 60. Returns the file `hash`.
 - `mcp__proxer__edit` — `{"filepath": "...", "start": 52, "end": 58, "content": "...", "hash": "..."}`; `hash` is the value from the read, and a mismatch rejects the edit.
 
@@ -38,7 +38,7 @@ Use the shell binary when no MCP server is connected, when you need `--root` for
 
 ## When to use Proxer vs grep / read
 
-Choose the cheaper tool for the query based on measured payload costs (232-file project benchmark: `Rebind` 35 hits = 1,203 B via `proxer` vs 3,715 B via `grep`; `sqlRepo` 22 hits = 1,186 B vs 2,387 B; `normalizeDriver` 4 hits = 724 B vs 381 B):
+Choose the cheaper tool for the query based on typical payload costs (e.g., ~1 KB vs ~2.4–3.7 KB via `grep` for symbols with 20–35 hits across a codebase, vs ~720 B vs ~380 B for a rare symbol with < 5 hits):
 
 - **Use `proxer search`** when the file is unknown or the hit count is likely large (roughly 10+ hits across files): `search` caps the payload to bounded, ranked chunks instead of dumping every matching line.
 - **Go straight to `grep` or `read`** when the file path is already known or only a handful of exact lines are expected (e.g., < 5 hits): `grep -n` or a targeted `read` is smaller (~380 B vs ~720 B) and skips FTS overhead.
@@ -87,10 +87,10 @@ Add `--no-refresh` (or set `PROXER_NO_REFRESH=1`) to query the index as it stand
 How matching behaves:
 
 - Terms match as **token prefixes**, so `-k "auth"` finds `AuthMiddleware`.
-- Terms match the **file path as well as the body**, and a path that carries the term outranks a chunk that merely mentions it, so `-k "000001"` finds `db/migrations/mysql/000001_init.up.sql`.
-- CamelCase is not split, so `-k "middleware"` will **not** find `AuthMiddleware`. Start from the beginning of an identifier.
+- Terms match the **file path as well as the body**, and a path that carries the term outranks a chunk that merely mentions it, so `-k "001"` finds `db/migrations/001_users.sql`.
+- On code and config files, `camelCase` and `PascalCase` identifiers are also sub-tokenized (trailing segments of 3+ chars), so `-k "middleware"` also finds `AuthMiddleware`.
 - Punctuation and FTS5 operators (`AND`, `OR`, `*`) are stripped, so natural language is safe but never errors.
-- Multiple words are OR-ed and ranked by relevance, then demoted by class. Prefer one distinctive identifier over a sentence.
+- Multiple words run **`AND`-first with `OR` fallback** and are ranked by relevance, then demoted by class. Prefer one or two distinctive identifiers over a sentence.
 
 Results come from 60-line chunks with a 15-line overlap, so `line` is the chunk boundary, not the exact hit. Use the snippet to see where inside the chunk the match sits. Five slots describe five different files, so one file that matched five times does not fill the answer.
 

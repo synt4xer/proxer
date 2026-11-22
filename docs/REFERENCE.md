@@ -50,7 +50,7 @@ All commands output JSON on stdout and write errors to stderr with a non-zero ex
 | Command | Purpose |
 | --- | --- |
 | `index` | Bring `.proxer.db` in line with the project tree (new, changed, and deleted files; skips minified/long-line blobs). |
-| `search -k <keyword> [-n <limit>] [--kind code\|docs\|all] [--no-refresh]` | Refresh the index, then return up to `limit` distinct files (default `5`, max `50`). |
+| `search -k <keyword> [-n <limit>] [--max-per-file <count>] [--kind code\|docs\|all] [--no-refresh]` | Refresh the index, then return up to `limit` distinct files (default `5`, max `50`) with up to `max-per-file` non-overlapping chunks per file (default `1`, max `5`). |
 | `read -f <file> -s <start> -e <end>` | Return `root`, `filepath`, the inclusive line range (lines >4,096 chars truncated with ` [truncated]`), and file `hash`. |
 | `edit -f <file> -s <start> -e <end> [--hash <hash>]` | Replace the line range with stdin content, then reindex only that file. |
 | `mcp` | Serve `index`, `search`, `read`, and `edit` as MCP tools over stdio. |
@@ -78,7 +78,7 @@ Example response:
 {
   "root": "/home/dev/code/my-awesome-project",
   "indexed_at": "2026-11-16T03:38:29.543151Z",
-  "refreshed": {"added": 1, "changed": 2, "removed": 0},
+  "refreshed": {"added": 1, "changed": 2, "removed": 0, "skipped": 0},
   "total": 12,
   "truncated": true,
   "results": [
@@ -96,16 +96,19 @@ Example response:
 Field notes:
 - `root`: Absolute path of the indexed project.
 - `indexed_at`: Timestamp when the index last changed (not when it was last checked).
-- `refreshed`: Counts of files added, changed, and removed during the pre-query refresh (omitted when `--no-refresh` or `PROXER_NO_REFRESH=1` is active).
+- `refreshed`: Counts of files added, changed, removed, and skipped during the pre-query refresh (omitted when `--no-refresh` or `PROXER_NO_REFRESH=1` is active).
 - `total` / `truncated`: Total matching chunks and whether results were capped by `limit`. `results` is `[]` (never `null`) when nothing matches.
 - `match`: `path`, `content`, or `both`. Path-only hits match the filename/path even if the chunk text does not contain the term.
 - `line`: The 60-line chunk boundary (15-line overlap), not the exact hit line.
-- `-n/--limit`: Distinct files returned (`1..50`, default `5`).
+- `-n/--limit`: Maximum results returned (`1..50`, default `5`).
+- `--max-per-file`: Maximum non-overlapping chunks returned from any single file (`1..5`, default `1`).
 - `--kind`: `all` (default: production code, tests, docs, assets), `code`, or `docs`.
 - `--no-refresh` / `PROXER_NO_REFRESH=1`: Query the existing index without walking the filesystem (useful for read-only mounts or pinned snapshots).
 
 Query details:
 - Every term is matched as a token prefix (`auth` matches `AuthMiddleware`).
+- On code and config files, `camelCase` and `PascalCase` identifiers are also sub-tokenized into trailing segments of at least 3 characters (`middleware` matches `AuthMiddleware`).
+- Multi-term queries run `AND`-first and fall back to `OR` when `AND` yields no results.
 - Free-form punctuation and FTS5 operators are sanitized automatically so natural language never triggers a syntax error.
 
 ### `read`
@@ -167,7 +170,7 @@ docs/                Documentation and integration guides
 - **Project scope:** `read` and `edit` reject `../` and paths outside `<root>`. Use the harness's built-in file tools for external files.
 - **Stat-gated refresh:** `search` refreshes by checking file size and modification time; a same-size write within the same timestamp tick is skipped until something else changes.
 - **Refresh walk cost:** Every `search` stats the tree (~36 ms at 8,000 files) unless `--no-refresh` or `PROXER_NO_REFRESH=1` is used.
-- **Token-prefix matching only:** CamelCase is not split (`middleware` will not match `AuthMiddleware`, while `auth` will). No regex or glob matching.
+- **No regex or glob matching:** `search` uses FTS5 token-prefix matching plus `camelCase`/`PascalCase` sub-token tails (3+ chars on code/config files), not arbitrary substring, regex, or glob patterns.
 - **Capped results:** `search` defaults to 5 distinct files (up to 50 with `-n/--limit`); check `total` and `truncated` when completeness matters.
 - **Indexed extensions only:** Files outside the known source/document allowlists or exact names (`Dockerfile`, `Makefile`, `go.mod`, etc., up to 1 MB) are not searchable, though `read` and `edit` still work on them.
 - **Line-range edits only:** Creating or deleting files is out of scope; `edit` replaces existing line ranges.
