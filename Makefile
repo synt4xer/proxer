@@ -44,5 +44,18 @@ install: build
 	@cp -R $(SKILL_SRC)/. $(DEST)/.agents/skills/$(SKILL_DIR_NAME)/
 	@echo "   - Injecting deterministic binary (proxer)..."
 	@cp $(BUILD_DIR)/$(APP_NAME) $(DEST)/.agents/skills/$(SKILL_DIR_NAME)/scripts/$(APP_NAME)
+	@if [ -f "$(DEST)/.gitignore" ]; then \
+		if grep -qxF '.proxer.db*' "$(DEST)/.gitignore"; then \
+			echo "   - .proxer.db* already in $(DEST)/.gitignore"; \
+		else \
+			if [ -s "$(DEST)/.gitignore" ] && [ -n "$$(tail -c 1 "$(DEST)/.gitignore")" ]; then \
+				printf '\n' >> "$(DEST)/.gitignore"; \
+			fi; \
+			printf '.proxer.db*\n' >> "$(DEST)/.gitignore"; \
+			echo "   - Added .proxer.db* to $(DEST)/.gitignore"; \
+		fi; \
+	else \
+		echo "   - Note: $(DEST)/.gitignore not found; add '.proxer.db*' to ignore database files."; \
+	fi
 	@echo "Agent Skill [$(SKILL_DIR_NAME)] installed successfully!"
 	@echo "Binary: $(DEST)/.agents/skills/$(SKILL_DIR_NAME)/scripts/$(APP_NAME)"
