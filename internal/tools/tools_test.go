@@ -649,3 +649,66 @@ func TestPerformReadLongLines(t *testing.T) {
 		assert.Equal(t, indexer.ContentHash([]byte(minified)), result.Hash)
 	})
 }
+
+func TestPerformSearchPriority2RankingAndSubtokens(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "p2.db")
+	db, err := database.Open(dbPath, indexer.Chunking())
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+
+	// 1. CamelCase / PascalCase sub-tokenization
+	require.NoError(t, os.WriteFile(filepath.Join(root, "auth.go"), []byte(
+		"package auth\n\nfunc AuthMiddleware(r sqlRepo) *HTTPServer {\n\treturn nil\n}\n",
+	), 0o644))
+
+	// 2. Multi-term AND-first with OR fallback
+	require.NoError(t, os.WriteFile(filepath.Join(root, "cooccur.go"), []byte(
+		"package auth\n\nfunc VerifySessionToken() {\n\t// verify session token together\n}\n",
+	), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "noise1.go"), []byte(
+		"package auth\n\n// token token token token token\nfunc TokenOnly() {}\n",
+	), 0o644))
+
+	// 3. Soft BM25 multiplier: strong doc match (path + dense body) vs weak 1-token code hit
+	var weakBuf strings.Builder
+	weakBuf.WriteString("package auth\n\n// architecture note\n")
+	for i := 0; i < 25; i++ {
+		fmt.Fprintf(&weakBuf, "func helper%d() int { return %d }\n", i, i)
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(root, "weak.go"), []byte(weakBuf.String()), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "architecture.md"), []byte(
+		"# Architecture Guide\n\nArchitecture overview, architecture diagram, architecture layers, architecture rules.\n",
+	), 0o644))
+
+	t.Run("sub-tokenization matches camelCase and PascalCase tails", func(t *testing.T) {
+		for _, kw := range []string{"middleware", "repo", "server"} {
+			res, err := tools.PerformSearch(db, root, kw, tools.SearchOptions{})
+			require.NoError(t, err)
+			require.NotEmpty(t, res.Results, "keyword %q should match auth.go", kw)
+			assert.Equal(t, "auth.go", res.Results[0].Filepath)
+		}
+	})
+
+	t.Run("multi-term AND ranks co-occurring file first and falls back to OR", func(t *testing.T) {
+		res, err := tools.PerformSearch(db, root, "verify token", tools.SearchOptions{Limit: 5})
+		require.NoError(t, err)
+		require.GreaterOrEqual(t, len(res.Results), 2)
+		assert.Equal(t, "cooccur.go", res.Results[0].Filepath, "AND match must rank above OR-only match")
+		assert.Equal(t, "noise1.go", res.Results[1].Filepath, "OR fallback must still include single-term match")
+
+		// Pure OR fallback when AND has 0 results
+		resFallback, err := tools.PerformSearch(db, root, "verify nonexistentterm", tools.SearchOptions{Limit: 5})
+		require.NoError(t, err)
+		require.NotEmpty(t, resFallback.Results)
+		assert.Equal(t, "cooccur.go", resFallback.Results[0].Filepath)
+	})
+
+	t.Run("soft BM25 multipliers let strong doc match beat weak code mention", func(t *testing.T) {
+		res, err := tools.PerformSearch(db, root, "architecture", tools.SearchOptions{Limit: 5})
+		require.NoError(t, err)
+		require.GreaterOrEqual(t, len(res.Results), 2)
+		assert.Equal(t, "architecture.md", res.Results[0].Filepath)
+		assert.Equal(t, "weak.go", res.Results[1].Filepath)
+	})
+}

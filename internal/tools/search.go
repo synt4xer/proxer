@@ -69,13 +69,18 @@ func searchTerms(keyword string) []string {
 	})
 }
 
-// buildMatchQuery converts free-form agent input into a valid FTS5 expression.
-// Every term is wrapped in double quotes so operators, parentheses, and stray
-// punctuation from natural language cannot reach the FTS5 parser as syntax.
-// Each term is also a prefix query, because agents search for fragments like
-// "auth" and expect to reach identifiers such as "AuthMiddleware".
-// Empty input is reported through the boolean instead of an erroring query.
+// buildMatchQuery converts free-form agent input into an OR FTS5 expression.
 func buildMatchQuery(keyword string) (string, bool) {
+	_, orQuery, _, ok := buildMatchQueries(keyword)
+	return orQuery, ok
+}
+
+// buildMatchQueries converts free-form agent input into valid FTS5 AND/OR
+// expressions. Every term is wrapped in double quotes so operators, parentheses,
+// and stray punctuation from natural language cannot reach the FTS5 parser as
+// syntax. Each term is also a prefix query, because agents search for fragments
+// like "auth" and expect to reach identifiers such as "AuthMiddleware".
+func buildMatchQueries(keyword string) (andQuery, orQuery string, multiTerm bool, ok bool) {
 	terms := searchTerms(keyword)
 
 	quoted := make([]string, 0, len(terms))
@@ -84,9 +89,12 @@ func buildMatchQuery(keyword string) (string, bool) {
 	}
 
 	if len(quoted) == 0 {
-		return "", false
+		return "", "", false, false
 	}
-	return strings.Join(quoted, " OR "), true
+	if len(quoted) == 1 {
+		return quoted[0], quoted[0], false, true
+	}
+	return strings.Join(quoted, " AND "), strings.Join(quoted, " OR "), true, true
 }
 
 // SearchOptions carries what PerformSearch needs besides the query. NoRefresh
@@ -138,7 +146,7 @@ func PerformSearch(db *sqlx.DB, root, keyword string, opts SearchOptions) (domai
 	}
 	response.IndexedAt = indexedAt
 
-	matchQuery, ok := buildMatchQuery(keyword)
+	andQuery, orQuery, multiTerm, ok := buildMatchQueries(keyword)
 	if !ok {
 		return response, nil
 	}
@@ -146,38 +154,23 @@ func PerformSearch(db *sqlx.DB, root, keyword string, opts SearchOptions) (domai
 	limit := clampLimit(opts.Limit)
 	window := candidateWindow(limit)
 
-	// An explicit kind narrows the query itself, not only the answer: a window
-	// that documentation filled still has to be able to produce code.
-	fetchQuery := matchQuery
-	switch kind {
-	case kindCode:
-		fetchQuery = excludeDocs(matchQuery)
-	case kindDocs:
-		fetchQuery = restrictToDocs(matchQuery)
-	}
-
-	candidates, err := rankedCandidates(db, fetchQuery, window)
+	candidates, total, err := fetchCandidates(db, andQuery, orQuery, multiTerm, kind, limit, window)
 	if err != nil {
 		return domain.SearchResponse{}, err
 	}
-
-	total := 0
-	if len(candidates) > 0 {
-		total = candidates[0].Total
-	}
 	response.Total = total
 
-	eligible := orderByKind(dedupeByFile(candidates), kind)
+	eligible := candidates
 
 	// Demotion can only reorder what the window contains. Fifty small files
 	// that mention a token densely outrank one mention inside a large source
 	// file, so a full window can hold no code at all. Ask once more with
 	// documentation excluded; on a tree where the kinds are interleaved the
 	// ordinary query already answered and this costs nothing.
-	if kind == kindAll && len(candidates) == window {
+	if kind == kindAll && total >= window {
 		parts := partitionByKind(eligible)
 		if len(parts[kindCode]) == 0 && len(parts[kindTest]) == 0 {
-			hidden, err := rankedCandidates(db, excludeDocs(matchQuery), window)
+			hidden, err := rankedCandidates(db, excludeDocs(orQuery), window)
 			if err != nil {
 				return domain.SearchResponse{}, err
 			}
@@ -207,21 +200,86 @@ func PerformSearch(db *sqlx.DB, root, keyword string, opts SearchOptions) (domai
 	return response, nil
 }
 
+func applyKindQuery(matchQuery string, kind fileKind) string {
+	switch kind {
+	case kindCode:
+		return excludeDocs(matchQuery)
+	case kindDocs:
+		return restrictToDocs(matchQuery)
+	default:
+		return matchQuery
+	}
+}
+
+// fetchCandidates runs AND-first for multi-term queries so co-occurring matches
+// rank first without single-token noise flooding, falling back to OR only when
+// AND returns fewer unique files than limit.
+func fetchCandidates(db *sqlx.DB, andQuery, orQuery string, multiTerm bool, kind fileKind, limit, window int) ([]domain.SearchResultDB, int, error) {
+	if !multiTerm {
+		candidates, err := rankedCandidates(db, applyKindQuery(orQuery, kind), window)
+		if err != nil {
+			return nil, 0, err
+		}
+		total := 0
+		if len(candidates) > 0 {
+			total = candidates[0].Total
+		}
+		return orderByKind(dedupeByFile(candidates), kind), total, nil
+	}
+
+	andCandidates, err := rankedCandidates(db, applyKindQuery(andQuery, kind), window)
+	if err != nil {
+		return nil, 0, err
+	}
+	andOrdered := orderByKind(dedupeByFile(andCandidates), kind)
+	if len(andOrdered) >= limit {
+		return andOrdered, andCandidates[0].Total, nil
+	}
+
+	orCandidates, err := rankedCandidates(db, applyKindQuery(orQuery, kind), window)
+	if err != nil {
+		return nil, 0, err
+	}
+	total := 0
+	if len(orCandidates) > 0 {
+		total = orCandidates[0].Total
+	}
+	orOrdered := orderByKind(dedupeByFile(orCandidates), kind)
+	if len(andOrdered) == 0 {
+		return orOrdered, total, nil
+	}
+
+	seen := make(map[string]struct{}, len(andOrdered))
+	for _, r := range andOrdered {
+		seen[r.Filepath] = struct{}{}
+	}
+	merged := make([]domain.SearchResultDB, len(andOrdered), len(andOrdered)+len(orOrdered))
+	copy(merged, andOrdered)
+	for _, r := range orOrdered {
+		if _, ok := seen[r.Filepath]; ok {
+			continue
+		}
+		merged = append(merged, r)
+	}
+	return merged, total, nil
+}
+
 // rankedCandidates fetches the best-ranked chunks for matchQuery. The match is
 // applied to the whole table rather than to the content column, so a token that
-// appears only in a file's path is found at all, and bm25() weights the path
-// above the body. chunk_search columns are (id, filepath, start_line, end_line,
-// content), which is why pathWeight sits second.
+// appears only in a file's path or identifier tails is found at all, and bm25()
+// weights the path above the body and exact body tokens above sub-token tails.
+// chunk_search columns are (id, filepath, start_line, end_line, content, tails),
+// which is why pathWeight sits second.
 func rankedCandidates(db *sqlx.DB, matchQuery string, window int) ([]domain.SearchResultDB, error) {
 	query := fmt.Sprintf(`
 		WITH matched AS (
 			SELECT filepath, start_line, end_line, content,
 			       snippet(chunk_search, 4, '<b>', '</b>', '...', 10) AS snippet,
-			       bm25(chunk_search, 0, %d, 0, 0, 1) AS score
+			       bm25(chunk_search, 0, %d, 0, 0, 1, 0.5) AS score
 			FROM chunk_search
 			WHERE chunk_search MATCH ?
 		)
-		SELECT filepath, start_line, end_line, content, snippet, count(*) OVER() AS total
+		SELECT filepath, start_line, end_line, content, snippet, score, count(*) OVER() AS total
 		FROM matched
 		ORDER BY score
 		LIMIT ?

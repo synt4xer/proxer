@@ -1,12 +1,13 @@
 package domain
 
 type SearchResultDB struct {
-	Filepath  string `db:"filepath"`
-	StartLine int    `db:"start_line"`
-	EndLine   int    `db:"end_line"`
-	Content   string `db:"content"`
-	Snippet   string `db:"snippet"`
-	Total     int    `db:"total"`
+	Filepath  string  `db:"filepath"`
+	StartLine int     `db:"start_line"`
+	EndLine   int     `db:"end_line"`
+	Content   string  `db:"content"`
+	Snippet   string  `db:"snippet"`
+	Score     float64 `db:"score"`
+	Total     int     `db:"total"`
 }
 
 // RefreshSummary reports what the pre-search refresh changed. It is omitted when
