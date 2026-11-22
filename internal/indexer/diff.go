@@ -26,13 +26,21 @@ func (r Refreshed) Empty() bool {
 	return r.Added == 0 && r.Changed == 0 && r.Removed == 0 && r.Skipped == 0
 }
 
+// ChangedFile pairs a changed manifest record with its already-read bytes so
+// applying the diff avoids re-reading and re-hashing the file.
+type ChangedFile struct {
+	Record  database.FileRecord
+	Content []byte
+	Removed bool
+}
+
 // Diff is the work one delta build has to apply. The four buckets are disjoint:
 // a file whose size and mtime are unchanged is in none of them, a file whose
 // bytes are provably identical is Touched and only its manifest row is
 // refreshed, and a file whose hash moved is Changed and gets re-chunked.
 type Diff struct {
 	Added   []database.FileRecord
-	Changed []database.FileRecord
+	Changed []ChangedFile
 	Touched []database.FileRecord
 	Removed []string
 }
@@ -52,13 +60,12 @@ func computeDiff(db *sqlx.DB, rootPath string, ignoredDirs []string) (*Diff, err
 	}
 
 	diff := &Diff{}
+	ignoredSet := make(map[string]struct{}, len(ignoredDirs))
+	for _, dir := range ignoredDirs {
+		ignoredSet[dir] = struct{}{}
+	}
 
 	walkErr := filepath.WalkDir(rootPath, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-
-		info, err := entry.Info()
 		if err != nil {
 			return nil
 		}
@@ -66,13 +73,23 @@ func computeDiff(db *sqlx.DB, rootPath string, ignoredDirs []string) (*Diff, err
 		if entry.IsDir() {
 			// The root itself is never skipped: an ignored directory name such
 			// as "build" is legitimate when it is the project being indexed.
-			if path != rootPath && !filesystem.IsIndexableDir(path, info, ignoredDirs) {
-				return filepath.SkipDir
+			if path != rootPath {
+				if _, ignored := ignoredSet[entry.Name()]; ignored {
+					return filepath.SkipDir
+				}
 			}
 			return nil
 		}
 
-		if !filesystem.IsIndexableFile(info) {
+		if !filesystem.IsIndexableFileName(entry.Name()) {
+			return nil
+		}
+
+		info, err := entry.Info()
+		if err != nil {
+			return nil
+		}
+		if info.Size() > config.MaxFileSize {
 			return nil
 		}
 
@@ -104,7 +121,7 @@ func computeDiff(db *sqlx.DB, rootPath string, ignoredDirs []string) (*Diff, err
 				// The file disappeared mid-walk; treating it as a change lets
 				// the delta drop rows that describe something no longer there.
 				current.Hash = stored.Hash
-				diff.Changed = append(diff.Changed, current)
+				diff.Changed = append(diff.Changed, ChangedFile{Record: current, Removed: true})
 				return nil
 			}
 			// Any other read failure is reported instead of silently keeping a
@@ -119,7 +136,7 @@ func computeDiff(db *sqlx.DB, rootPath string, ignoredDirs []string) (*Diff, err
 			return nil
 		}
 
-		diff.Changed = append(diff.Changed, current)
+		diff.Changed = append(diff.Changed, ChangedFile{Record: current, Content: content})
 		return nil
 	})
 	if walkErr != nil {
@@ -131,7 +148,7 @@ func computeDiff(db *sqlx.DB, rootPath string, ignoredDirs []string) (*Diff, err
 	}
 
 	sort.Slice(diff.Added, func(i, j int) bool { return diff.Added[i].Path < diff.Added[j].Path })
-	sort.Slice(diff.Changed, func(i, j int) bool { return diff.Changed[i].Path < diff.Changed[j].Path })
+	sort.Slice(diff.Changed, func(i, j int) bool { return diff.Changed[i].Record.Path < diff.Changed[j].Record.Path })
 	sort.Slice(diff.Touched, func(i, j int) bool { return diff.Touched[i].Path < diff.Touched[j].Path })
 	sort.Strings(diff.Removed)
 
@@ -174,7 +191,7 @@ func applyDiff(db *sqlx.DB, rootPath string, diff *Diff) (Refreshed, error) {
 		// An added file is absent from the manifest, so by construction it has
 		// no stored chunks: skipping the delete keeps a cold build from paying
 		// for a no-op statement per file.
-		stored, err := storeCurrentFile(tx, writer, rootPath, entry, false)
+		stored, err := storeCurrentFile(tx, writer, rootPath, entry, nil, false)
 		if err != nil {
 			writer.Close()
 			return Refreshed{}, err
@@ -186,8 +203,15 @@ func applyDiff(db *sqlx.DB, rootPath string, diff *Diff) (Refreshed, error) {
 		}
 	}
 
-	for _, entry := range diff.Changed {
-		stored, err := storeCurrentFile(tx, writer, rootPath, entry, true)
+	for _, changed := range diff.Changed {
+		if changed.Removed {
+			if err := database.Remove(tx, changed.Record.Path); err != nil {
+				writer.Close()
+				return Refreshed{}, err
+			}
+			continue
+		}
+		stored, err := storeCurrentFile(tx, writer, rootPath, changed.Record, changed.Content, true)
 		if err != nil {
 			writer.Close()
 			return Refreshed{}, err
@@ -222,25 +246,28 @@ func applyDiff(db *sqlx.DB, rootPath string, diff *Diff) (Refreshed, error) {
 // that lands between the walk and this read leaves the row slightly behind, so
 // the next build re-reads the file and finds the same hash; that costs one read
 // and never produces a wrong answer.
-func storeCurrentFile(tx *sqlx.Tx, writer *database.Writer, rootPath string, entry database.FileRecord, replace bool) (bool, error) {
-	path := filepath.Join(rootPath, filepath.FromSlash(entry.Path))
+func storeCurrentFile(tx *sqlx.Tx, writer *database.Writer, rootPath string, entry database.FileRecord, content []byte, replace bool) (bool, error) {
+	if content == nil {
+		path := filepath.Join(rootPath, filepath.FromSlash(entry.Path))
 
-	content, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			// Removed between the walk and the write: dropping it is the
-			// truthful outcome, and it keeps the manifest and chunks aligned.
+		var err error
+		content, err = os.ReadFile(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				// Removed between the walk and the write: dropping it is the
+				// truthful outcome, and it keeps the manifest and chunks aligned.
+				return false, database.Remove(tx, entry.Path)
+			}
+			return false, fmt.Errorf("failed to read %s: %w", entry.Path, err)
+		}
+
+		if int64(len(content)) > config.MaxFileSize {
 			return false, database.Remove(tx, entry.Path)
 		}
-		return false, fmt.Errorf("failed to read %s: %w", entry.Path, err)
-	}
 
-	if int64(len(content)) > config.MaxFileSize {
-		return false, database.Remove(tx, entry.Path)
+		entry.Size = int64(len(content))
+		entry.Hash = ContentHash(content)
 	}
-
-	entry.Size = int64(len(content))
-	entry.Hash = ContentHash(content)
 
 	indexContent, ok := PrepareContentForIndex(content, config.MaxLineWidth)
 	if !ok {
