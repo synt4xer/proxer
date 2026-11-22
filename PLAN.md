@@ -184,16 +184,15 @@ The current search pipeline gives strong baseline recall, but three algorithmic 
 
 #### Tasks
 
-- [ ] **Identifier sub-tokenization (`camelCase` / `snake_case`):**
+- [x] **Identifier sub-tokenization (`camelCase` / `snake_case`):**
   - Write a pure splitter with a test table (`AuthMiddleware` → `auth middleware`; `HTTPServer` → `http server`; `sqlRepo` → `repo`; `v2` unchanged), deriving only the tails since prefix matching already covers the head.
-  - Add an auxiliary indexed FTS5 column (preserving raw `content` for `snippet()` and `read`) and measure the first build at 32,000 chunks against P0's 2.00 s baseline.
-  - *Kill criterion:* If the first build exceeds 3 s, narrow the rule (code files only, or tails above a minimum identifier length) or keep the column deferred.
-  - Land with a `schema_version` bump so existing indexes rebuild cleanly once.
-- [ ] **Soft BM25 score multipliers (`internal/tools/kind.go`, `internal/tools/search.go`):**
-  - Replace strict `fileKind` hard bucketing in `orderByKind` with soft multipliers applied in Go to negative SQLite `bm25()` scores (e.g., Code `1.0x`, Test `0.6x`, Docs `0.35x`, Assets `0.1x`) when `--kind all` is used, while keeping explicit `--kind code|docs` filtering intact.
+  - Add an auxiliary indexed FTS5 column (`tails`, preserving raw `content` for `snippet()` and `read`) and measure the first build at 32,000 chunks against P0's 2.00 s baseline: measured 2.16 s without `tails`, 4.39 s naive, 3.61 s after zero-alloc ASCII fast path on a worst-case 100%-camelCase fixture; narrowed to code files and tails >= 3 chars.
+  - Land with a `schema_version` bump (`"1"` → `"2"`) so existing indexes rebuild cleanly once.
+- [x] **Soft BM25 score multipliers (`internal/tools/kind.go`, `internal/tools/search.go`):**
+  - Replace strict `fileKind` hard bucketing in `orderByKind` with soft multipliers applied in Go to negative SQLite `bm25()` scores (Code `1.0x`, Test `0.6x`, Docs `0.35x`, Assets `0.1x`) when `--kind all` is used, while keeping explicit `--kind code|docs` filtering intact.
   - *Trade-off:* Strong exact matches in tests or docs can outrank weak 1-token noise in code without losing code-first preference on equal matches.
-- [ ] **`AND`-first query coordination with `OR` fallback (`internal/tools/search.go`):**
-  - For multi-term queries, execute an `AND` query first; if it returns zero results (or fewer than a small threshold), fall back to `OR`.
+- [x] **`AND`-first query coordination with `OR` fallback (`internal/tools/search.go`):**
+  - For multi-term queries, execute an `AND` query first; if it returns fewer unique files than `limit`, fall back to `OR` and merge `AND` hits first.
   - *Trade-off:* Eliminates single-token noise flooding on multi-word queries while preserving recall, paying a second query only when `AND` is too strict.
 
 #### Done when
