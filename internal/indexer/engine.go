@@ -124,7 +124,7 @@ func reindexFile(tx *sqlx.Tx, writer *database.Writer, rel, path string, content
 		Hash:    ContentHash(content),
 	}
 
-	indexContent, ok := PrepareContentForIndex(content, config.MaxLineWidth)
+	lines, ok := PrepareContentForIndex(content, config.MaxLineWidth)
 	if !ok {
 		if err := database.DeleteChunks(tx, rel); err != nil {
 			return err
@@ -132,7 +132,7 @@ func reindexFile(tx *sqlx.Tx, writer *database.Writer, rel, path string, content
 		return writer.StoreManifest(entry)
 	}
 
-	return writer.Store(entry, indexContent, true)
+	return writer.StoreLines(entry, lines, true)
 }
 
 // relativePath keys a file by its location inside the project. Absolute keys
