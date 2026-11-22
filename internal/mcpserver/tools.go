@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/synt4xer/proxer/internal/domain"
@@ -17,9 +18,10 @@ type indexOutput struct {
 }
 
 type searchInput struct {
-	Keyword string `json:"keyword" jsonschema:"terms to search for; each term matches as a token prefix and multiple terms are OR-ed"`
-	Limit   int    `json:"limit,omitempty" jsonschema:"maximum number of results to return, clamped to 1..50 (default 5)"`
-	Kind    string `json:"kind,omitempty" jsonschema:"which files to search: code, docs, or all (default all, which orders production code before test files before docs before generated assets)"`
+	Keyword    string `json:"keyword" jsonschema:"terms to search for; each term matches as a token prefix and multiple terms are OR-ed"`
+	Limit      int    `json:"limit,omitempty" jsonschema:"maximum number of results to return, clamped to 1..50 (default 5)"`
+	Kind       string `json:"kind,omitempty" jsonschema:"which files to search: code, docs, or all (default all, which orders production code before test files before docs before generated assets)"`
+	MaxPerFile int    `json:"max_per_file,omitempty" jsonschema:"maximum non-overlapping chunks returned per file, clamped to 1..5 (default 1)"`
 }
 
 type readInput struct {
@@ -81,20 +83,49 @@ func (s *Server) addSearchTool() {
 			"and whether its terms matched the path, the content, or both. " +
 			"Empty or punctuation-only input returns no matches.",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in searchInput) (*mcp.CallToolResult, domain.SearchResponse, error) {
+		noRefresh := s.shouldSkipRefresh()
 		response, err := tools.PerformSearch(s.db, s.root, in.Keyword, tools.SearchOptions{
-			NoRefresh:   s.noRefresh,
+			NoRefresh:   noRefresh,
 			IgnoredDirs: s.ignoredDirs,
 			Limit:       in.Limit,
 			Kind:        in.Kind,
+			MaxPerFile:  in.MaxPerFile,
 		})
 		if err != nil {
 			return nil, domain.SearchResponse{}, err
+		}
+		if !noRefresh {
+			s.recordRefresh()
 		}
 		if response.Results == nil {
 			response.Results = []domain.SearchResultJSON{}
 		}
 		return nil, response, nil
 	})
+}
+
+func (s *Server) shouldSkipRefresh() bool {
+	if s.noRefresh {
+		return true
+	}
+	if s.refreshCooldown <= 0 {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.lastRefreshAt.IsZero() && s.now().Sub(s.lastRefreshAt) < s.refreshCooldown
+}
+
+func (s *Server) recordRefresh() {
+	s.mu.Lock()
+	s.lastRefreshAt = s.now()
+	s.mu.Unlock()
+}
+
+func (s *Server) invalidateRefresh() {
+	s.mu.Lock()
+	s.lastRefreshAt = time.Time{}
+	s.mu.Unlock()
 }
 
 func (s *Server) addReadTool() {
@@ -134,6 +165,7 @@ func (s *Server) addEditTool() {
 		if err != nil {
 			return nil, domain.EditResultJSON{}, err
 		}
+		s.invalidateRefresh()
 		return nil, result, nil
 	})
 }

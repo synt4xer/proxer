@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
@@ -179,4 +180,62 @@ func TestServerIndexHonorsTheProjectSkipList(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &response))
 	assert.Empty(t, response.Results, "the index must honor the skip list the server was built with")
 	assert.Zero(t, response.Refreshed.Added, "a file inside an ignored directory must not be picked up by the refresh")
+}
+
+func TestServerCoalescesRapidSearchRefreshes(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "main.go"), []byte(mockCode), 0o644))
+
+	db, err := database.Open(filepath.Join(root, config.DBFile), indexer.Chunking())
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+
+	clock := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	srv := New(db, root, config.DefaultIgnoredDirs)
+	srv.now = func() time.Time { return clock }
+
+	ctx := context.Background()
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	serverSession, err := srv.mcp.Connect(ctx, serverTransport, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { serverSession.Close() })
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "proxer-test", Version: "0"}, nil)
+	cs, err := client.Connect(ctx, clientTransport, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { cs.Close() })
+
+	// First search refreshes the index.
+	var first domain.SearchResponse
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, callTool(t, cs, "search", map[string]any{"keyword": "ProcessData"}))), &first))
+	require.NotNil(t, first.Refreshed)
+	assert.Equal(t, 1, first.Refreshed.Added)
+
+	// Immediate follow-up within cooldown skips the directory walk.
+	clock = clock.Add(500 * time.Millisecond)
+	var second domain.SearchResponse
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, callTool(t, cs, "search", map[string]any{"keyword": "ProcessData"}))), &second))
+	assert.Nil(t, second.Refreshed, "search within cooldown should skip refresh")
+
+	// edit invalidates the cooldown immediately.
+	var read domain.ReadResultJSON
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, callTool(t, cs, "read", map[string]any{"filepath": "main.go"}))), &read))
+	editRes := callTool(t, cs, "edit", map[string]any{
+		"filepath": "main.go",
+		"start":    3,
+		"end":      3,
+		"content":  "\treturn \"cooldown\"",
+		"hash":     read.Hash,
+	})
+	require.False(t, editRes.IsError)
+
+	var afterEdit domain.SearchResponse
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, callTool(t, cs, "search", map[string]any{"keyword": "cooldown"}))), &afterEdit))
+	require.NotNil(t, afterEdit.Refreshed, "edit must invalidate refresh cooldown")
+
+	// Advancing past the cooldown triggers a fresh walk.
+	clock = clock.Add(defaultRefreshCooldown + time.Millisecond)
+	var afterCooldown domain.SearchResponse
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, callTool(t, cs, "search", map[string]any{"keyword": "cooldown"}))), &afterCooldown))
+	require.NotNil(t, afterCooldown.Refreshed, "search after cooldown expires must refresh again")
 }
