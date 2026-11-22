@@ -36,6 +36,13 @@ The MCP server fixes the root when it starts, so its tools take no `--root` and 
 
 Use the shell binary when no MCP server is connected, when you need `--root` for another project, or when the harness only exposes the skill.
 
+## When to use Proxer vs grep / read
+
+Choose the cheaper tool for the query based on measured payload costs (232-file project benchmark: `Rebind` 35 hits = 1,203 B via `proxer` vs 3,715 B via `grep`; `sqlRepo` 22 hits = 1,186 B vs 2,387 B; `normalizeDriver` 4 hits = 724 B vs 381 B):
+
+- **Use `proxer search`** when the file is unknown or the hit count is likely large (roughly 10+ hits across files): `search` caps the payload to bounded, ranked chunks instead of dumping every matching line.
+- **Go straight to `grep` or `read`** when the file path is already known or only a handful of exact lines are expected (e.g., < 5 hits): `grep -n` or a targeted `read` is smaller (~380 B vs ~720 B) and skips FTS overhead.
+
 ## Workflow
 
 1. `search` to find where something lives. It refreshes the index first, so a database that does not exist yet is built and files written by other tools are found.
