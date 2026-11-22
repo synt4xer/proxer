@@ -166,7 +166,7 @@ func validateIgnoredDir(dir string) error {
 var AllowedExtensions = []string{
 	".go", ".rb", ".py", ".php", ".rs", ".java", ".c", ".cpp", ".cs",
 	".js", ".jsx", ".ts", ".tsx", ".vue", ".svelte", ".astro",
-	".html", ".css", ".scss", ".sass", ".less", ".tailwind.css",
+	".html", ".css", ".scss", ".sass", ".less",
 	".md", ".json", ".yaml", ".yml", ".toml", ".ini", ".env",
 	".sql", ".sh", ".bash",
 }
