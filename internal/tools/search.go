@@ -106,12 +106,12 @@ type SearchOptions struct {
 // out, it first brings the index in line with the tree, because a harness tool
 // that wrote a file is otherwise invisible to proxer and the stale answer is
 // indistinguishable from "no match".
-func PerformSearch(db *sqlx.DB, root, keyword string, opts SearchOptions) (string, error) {
+func PerformSearch(db *sqlx.DB, root, keyword string, opts SearchOptions) (domain.SearchResponse, error) {
 	// The kind is validated before the refresh so a typo costs a parse, not a
 	// walk over the tree.
 	kind, err := parseKind(opts.Kind)
 	if err != nil {
-		return "", err
+		return domain.SearchResponse{}, err
 	}
 
 	response := domain.SearchResponse{
@@ -122,7 +122,7 @@ func PerformSearch(db *sqlx.DB, root, keyword string, opts SearchOptions) (strin
 	if !opts.NoRefresh {
 		refreshed, err := indexer.IndexProject(db, root, opts.IgnoredDirs)
 		if err != nil {
-			return "", fmt.Errorf("failed to refresh the index: %w", err)
+			return domain.SearchResponse{}, fmt.Errorf("failed to refresh the index: %w", err)
 		}
 		response.Refreshed = &domain.RefreshSummary{
 			Added:   refreshed.Added,
@@ -134,13 +134,13 @@ func PerformSearch(db *sqlx.DB, root, keyword string, opts SearchOptions) (strin
 
 	indexedAt, err := database.IndexedAt(db)
 	if err != nil {
-		return "", fmt.Errorf("failed to read the index timestamp: %w", err)
+		return domain.SearchResponse{}, fmt.Errorf("failed to read the index timestamp: %w", err)
 	}
 	response.IndexedAt = indexedAt
 
 	matchQuery, ok := buildMatchQuery(keyword)
 	if !ok {
-		return encodeJSON(response)
+		return response, nil
 	}
 
 	limit := clampLimit(opts.Limit)
@@ -156,19 +156,16 @@ func PerformSearch(db *sqlx.DB, root, keyword string, opts SearchOptions) (strin
 		fetchQuery = restrictToDocs(matchQuery)
 	}
 
-	// total is the honest measure of how much matched, so a capped answer can
-	// say so. It counts chunks, not files: count(DISTINCT filepath) costs
-	// 233 ms at 65,800 chunks against 5 ms for this one.
-	total, err := matchTotal(db, fetchQuery)
-	if err != nil {
-		return "", err
-	}
-	response.Total = total
-
 	candidates, err := rankedCandidates(db, fetchQuery, window)
 	if err != nil {
-		return "", err
+		return domain.SearchResponse{}, err
 	}
+
+	total := 0
+	if len(candidates) > 0 {
+		total = candidates[0].Total
+	}
+	response.Total = total
 
 	eligible := orderByKind(dedupeByFile(candidates), kind)
 
@@ -182,7 +179,7 @@ func PerformSearch(db *sqlx.DB, root, keyword string, opts SearchOptions) (strin
 		if len(parts[kindCode]) == 0 && len(parts[kindTest]) == 0 {
 			hidden, err := rankedCandidates(db, excludeDocs(matchQuery), window)
 			if err != nil {
-				return "", err
+				return domain.SearchResponse{}, err
 			}
 			eligible = append(filterKind(dedupeByFile(hidden), kindCode), eligible...)
 		}
@@ -203,15 +200,11 @@ func PerformSearch(db *sqlx.DB, root, keyword string, opts SearchOptions) (strin
 			Filepath: r.Filepath,
 			Line:     fmt.Sprintf("%d-%d", r.StartLine, r.EndLine),
 			Snippet:  r.Snippet,
-			Match:    matchPart(terms, r.Filepath),
+			Match:    matchPart(terms, r.Filepath, r.Content),
 		})
 	}
 
-	out, err := encodeJSON(response)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal JSON: %w", err)
-	}
-	return out, nil
+	return response, nil
 }
 
 // rankedCandidates fetches the best-ranked chunks for matchQuery. The match is
@@ -221,10 +214,16 @@ func PerformSearch(db *sqlx.DB, root, keyword string, opts SearchOptions) (strin
 // content), which is why pathWeight sits second.
 func rankedCandidates(db *sqlx.DB, matchQuery string, window int) ([]domain.SearchResultDB, error) {
 	query := fmt.Sprintf(`
-		SELECT filepath, start_line, end_line, snippet(chunk_search, 4, '<b>', '</b>', '...', 10) as snippet
-		FROM chunk_search
-		WHERE chunk_search MATCH ?
-		ORDER BY bm25(chunk_search, 0, %d, 0, 0, 1)
+		WITH matched AS (
+			SELECT filepath, start_line, end_line, content,
+			       snippet(chunk_search, 4, '<b>', '</b>', '...', 10) AS snippet,
+			       bm25(chunk_search, 0, %d, 0, 0, 1) AS score
+			FROM chunk_search
+			WHERE chunk_search MATCH ?
+		)
+		SELECT filepath, start_line, end_line, content, snippet, count(*) OVER() AS total
+		FROM matched
+		ORDER BY score
 		LIMIT ?
 	`, pathWeight)
 
@@ -252,30 +251,23 @@ func dedupeByFile(candidates []domain.SearchResultDB) []domain.SearchResultDB {
 	return unique
 }
 
-// matchTotal counts every chunk the match reaches, which is what makes a capped
-// result set visible to the caller.
-func matchTotal(db *sqlx.DB, matchQuery string) (int, error) {
-	var total int
-	if err := db.Get(&total, "SELECT count(*) FROM chunk_search WHERE chunk_search MATCH ?", matchQuery); err != nil {
-		return 0, fmt.Errorf("SQLite count error: %w", err)
-	}
-	return total, nil
-}
-
 // matchPart reports where the terms landed: in the file's path, in its content,
-// or in both. FTS5 returns the row without saying which column matched, so the
-// terms are tested against the path in Go instead of asking a second question.
-// A term that is not in the path did not match there; since terms are OR-ed it
-// either reached the content or matched nothing, and "content" is the honest
-// answer to give a caller that only sees the match.
-func matchPart(terms []string, filePath string) string {
-	path := strings.ToLower(filePath)
+// or in both. Checking both the path and the chunk content avoids mislabeling
+// multi-term OR queries where an unmatched term is absent from the path.
+func matchPart(terms []string, filePath, content string) string {
+	lowerPath := strings.ToLower(filePath)
+	lowerContent := strings.ToLower(content)
 	pathHit, contentHit := false, false
 	for _, term := range terms {
-		if strings.Contains(path, strings.ToLower(term)) {
+		lowerTerm := strings.ToLower(term)
+		if strings.Contains(lowerPath, lowerTerm) {
 			pathHit = true
-		} else {
+		}
+		if strings.Contains(lowerContent, lowerTerm) {
 			contentHit = true
+		}
+		if pathHit && contentHit {
+			return "both"
 		}
 	}
 

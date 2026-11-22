@@ -18,18 +18,18 @@ import (
 // against root but echoed back as given, so agents can chain read and edit
 // calls with the same spelling they already have in context. The hash covers
 // the whole file, so edit can tell whether anything shifted since the read.
-func PerformRead(root, path string, startLine, endLine int) (string, error) {
+func PerformRead(root, path string, startLine, endLine int) (domain.ReadResultJSON, error) {
 	resolved, err := resolvePath(root, path)
 	if err != nil {
-		return "", err
+		return domain.ReadResultJSON{}, err
 	}
 
 	data, err := os.ReadFile(resolved)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return "", fmt.Errorf("file '%s' not found. It may have been deleted", path)
+			return domain.ReadResultJSON{}, fmt.Errorf("file '%s' not found. It may have been deleted", path)
 		}
-		return "", fmt.Errorf("failed to open file: %w", err)
+		return domain.ReadResultJSON{}, fmt.Errorf("failed to open file: %w", err)
 	}
 
 	reader := bufio.NewReader(bytes.NewReader(data))
@@ -42,7 +42,7 @@ func PerformRead(root, path string, startLine, endLine int) (string, error) {
 			if errors.Is(err, io.EOF) {
 				break
 			}
-			return "", fmt.Errorf("error reading file '%s': %w", path, err)
+			return domain.ReadResultJSON{}, fmt.Errorf("error reading file '%s': %w", path, err)
 		}
 
 		if currentLine >= startLine && currentLine <= endLine {
@@ -60,20 +60,14 @@ func PerformRead(root, path string, startLine, endLine int) (string, error) {
 			if errors.Is(err, io.EOF) {
 				break
 			}
-			return "", fmt.Errorf("error reading file '%s': %w", path, err)
+			return domain.ReadResultJSON{}, fmt.Errorf("error reading file '%s': %w", path, err)
 		}
 	}
 
-	result := domain.ReadResultJSON{
+	return domain.ReadResultJSON{
 		Root:     root,
 		Filepath: path,
 		Content:  contentBuilder.String(),
 		Hash:     indexer.ContentHash(data),
-	}
-
-	out, err := encodeJSON(result)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal JSON: %w", err)
-	}
-	return out, nil
+	}, nil
 }
