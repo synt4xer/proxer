@@ -76,12 +76,19 @@ func (w *Writer) Close() error {
 // was not in the manifest has no rows to drop, which is why the caller passes
 // replace only when it might.
 func (w *Writer) Store(rec FileRecord, content string, replace bool) error {
+	return w.StoreLines(rec, strings.Split(content, "\n"), replace)
+}
+
+// StoreLines replaces the rows stored for rec.Path with chunks built from
+// pre-split lines and then records the manifest row. Callers that already
+// split lines for sanitization avoid a redundant join-and-split round trip.
+func (w *Writer) StoreLines(rec FileRecord, lines []string, replace bool) error {
 	if replace {
 		if err := DeleteChunks(w.tx, rec.Path); err != nil {
 			return err
 		}
 	}
-	if err := w.write(rec.Path, content); err != nil {
+	if err := w.writeLines(rec.Path, lines); err != nil {
 		return err
 	}
 	return w.StoreManifest(rec)
@@ -96,11 +103,11 @@ func (w *Writer) StoreManifest(rec FileRecord) error {
 	return nil
 }
 
-// write splits content into overlapping windows and stores each window under
-// rel, recording the rowid of every inserted row in index_chunks. The map is
-// what makes a later delete proportional to the file instead of the project.
-func (w *Writer) write(rel, content string) error {
-	lines := strings.Split(content, "\n")
+// writeLines splits pre-split lines into overlapping windows and stores each
+// window under rel, recording the rowid of every inserted row in index_chunks.
+// The map is what makes a later delete proportional to the file instead of the
+// project.
+func (w *Writer) writeLines(rel string, lines []string) error {
 	totalLines := len(lines)
 	step := w.chunking.Size - w.chunking.Overlap
 	if step <= 0 {
