@@ -58,6 +58,7 @@ func TestIsIndexableFile(t *testing.T) {
 		{name: "Allow normal Go file", fileName: "main.go", fileSize: 1024, expected: true},
 		{name: "Allow exact name Dockerfile", fileName: "Dockerfile", fileSize: 500, expected: true},
 		{name: "Allow dot env file", fileName: ".env.local", fileSize: 200, expected: true},
+		{name: "Allow tailwind css via .css", fileName: "app.tailwind.css", fileSize: 512, expected: true},
 		{name: "Block file over size limit", fileName: "large.go", fileSize: int64(config.MaxFileSize + 1), expected: false},
 		{name: "Block unsupported extension", fileName: "image.png", fileSize: 1024, expected: false},
 		{name: "Block file with no extension", fileName: "unknown_binary", fileSize: 1024, expected: false},
@@ -68,6 +69,9 @@ func TestIsIndexableFile(t *testing.T) {
 			info := mockFileInfo{name: tt.fileName, size: tt.fileSize, isDir: false}
 			result := filesystem.IsIndexableFile(info)
 			assert.Equal(t, tt.expected, result)
+			if tt.fileSize <= config.MaxFileSize {
+				assert.Equal(t, tt.expected, filesystem.IsIndexableFileName(tt.fileName))
+			}
 		})
 	}
 }
