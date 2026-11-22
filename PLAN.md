@@ -211,14 +211,14 @@ As repositories grow or MCP sessions run many queries back-to-back, three struct
 
 #### Tasks
 
-- [ ] **Avoid `Split` → `Join` → `Split` allocations (`internal/indexer/lines.go`, `database/chunks.go`):**
-  - Have `PrepareContentForIndex` return `[]string` (lines) directly and pass `[]string` into `Writer.write` / chunking.
-- [ ] **Heuristic line-boundary snapping in chunker (`database/chunks.go`):**
-  - Allow chunk end boundaries to snap within a small window (e.g., ±5–10 lines around `ChunkSize`) to blank lines or zero-indent block boundaries instead of adding heavy CGO/tree-sitter dependencies.
+- [x] **Avoid `Split` → `Join` → `Split` allocations (`internal/indexer/lines.go`, `database/chunks.go`):**
+  - `PrepareContentForIndex` now returns `[]string` directly and `Writer.StoreLines` / `writeLines` chunks the pre-split slice without re-joining and re-splitting.
+- [x] **Heuristic line-boundary snapping in chunker (`database/chunks.go`):**
+  - `snapChunkEnd` snaps chunk ends within a ±8-line window around `ChunkSize` (for windows >= 20 lines) to blank-line boundaries first, then zero-indent top-level lines, keeping `Overlap` continuous from the snapped end.
   - *Trade-off:* Better self-contained context for agents with minimal complexity and pure-Go portability preserved.
-- [ ] **MCP walk coalescing & multi-chunk per-file option (`internal/mcpserver/`, `internal/tools/search.go`):**
-  - Add an optional short in-memory refresh cooldown (e.g., 1–2 s, immediately invalidated on `edit`) in the MCP server so rapid sequential `search` calls do not repeat full directory walks.
-  - Evaluate relaxing `dedupeByFile` from 1 chunk per file to max-K (e.g., 2) non-overlapping chunks per file so large files with multiple relevant regions are not truncated to a single hit.
+- [x] **MCP walk coalescing & multi-chunk per-file option (`internal/mcpserver/`, `internal/tools/search.go`):**
+  - Added a 2 s in-memory `refreshCooldown` on `mcpserver.Server` so rapid sequential `search` calls skip redundant directory walks while `edit` immediately invalidates the cooldown.
+  - Added `MaxPerFile` to `tools.SearchOptions` and `max_per_file` (default 1, clamped 1..5) to MCP `searchInput`, allowing `dedupeByFile` to return up to K non-overlapping chunks per file without changing the default 1-hit-per-file behavior.
 
 #### Done when
 
