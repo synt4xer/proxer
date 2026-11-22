@@ -97,6 +97,29 @@ func TestOrderByKind(t *testing.T) {
 	}, paths(code), "--kind code keeps both production code and tests, production first")
 }
 
+func TestOrderByKindSoftMultipliers(t *testing.T) {
+	// Strong exact matches in tests or docs can outrank weak 1-token code noise,
+	// while equal scores still preserve Code > Test > Docs > Assets.
+	candidates := []domain.SearchResultDB{
+		{Filepath: "weak_code.go", Score: -1.5},
+		{Filepath: "strong_test_test.go", Score: -10.0}, // -10.0 * 0.6 = -6.0
+		{Filepath: "strong_doc.md", Score: -10.0},       // -10.0 * 0.35 = -3.5
+		{Filepath: "equal_doc.md", Score: -2.0},         // -2.0 * 0.35 = -0.7
+		{Filepath: "equal_code.go", Score: -2.0},        // -2.0 * 1.0 = -2.0
+		{Filepath: "static/app.min.js", Score: -5.0},    // -5.0 * 0.1 = -0.5
+	}
+
+	ordered := orderByKind(candidates, kindAll)
+	assert.Equal(t, []string{
+		"strong_test_test.go",
+		"strong_doc.md",
+		"equal_code.go",
+		"weak_code.go",
+		"equal_doc.md",
+		"static/app.min.js",
+	}, paths(ordered))
+}
+
 func paths(results []domain.SearchResultDB) []string {
 	out := make([]string, 0, len(results))
 	for _, result := range results {
