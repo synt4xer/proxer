@@ -1,7 +1,9 @@
 package database_test
 
 import (
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jmoiron/sqlx"
@@ -163,4 +165,38 @@ func TestOpenUpgradesLegacyV1Schema(t *testing.T) {
 	require.NoError(t, db.Get(&version, "SELECT value FROM meta WHERE key = 'schema_version'"))
 	assert.Equal(t, database.SchemaVersion, version)
 	assert.Equal(t, 1, count(t, db, "SELECT COUNT(*) FROM chunk_search WHERE chunk_search MATCH 'middleware'"))
+}
+
+func TestStoreSnapsChunksToNaturalBoundaries(t *testing.T) {
+	chunking := database.Chunking{Size: 60, Overlap: 15}
+	db := open(t, filepath.Join(t.TempDir(), "snap.db"), chunking)
+
+	// Build 90 lines where line 56 is a closing brace followed by a blank line
+	// at line 57 and a new top-level function at line 58.
+	lines := make([]string, 90)
+	for i := range lines {
+		switch i + 1 {
+		case 56:
+			lines[i] = "}"
+		case 57:
+			lines[i] = ""
+		case 58:
+			lines[i] = "func nextHandler() {"
+		default:
+			lines[i] = fmt.Sprintf("    line_%d := %d", i+1, i+1)
+		}
+	}
+
+	content := strings.Join(lines, "\n")
+	store(t, db, chunking, database.FileRecord{Path: "handler.go", Size: int64(len(content)), Hash: "h"}, content, false)
+
+	type chunkRange struct {
+		StartLine int `db:"start_line"`
+		EndLine   int `db:"end_line"`
+	}
+	var chunks []chunkRange
+	require.NoError(t, db.Select(&chunks, "SELECT start_line, end_line FROM chunk_search WHERE filepath = 'handler.go' ORDER BY start_line"))
+	require.Len(t, chunks, 2)
+	assert.Equal(t, chunkRange{StartLine: 1, EndLine: 57}, chunks[0], "first chunk should snap to the blank-line boundary instead of splitting at 60")
+	assert.Equal(t, chunkRange{StartLine: 57 - chunking.Overlap + 1, EndLine: 90}, chunks[1], "second chunk should resume with overlap from the snapped boundary")
 }
