@@ -41,6 +41,17 @@ func IndexProject(db *sqlx.DB, rootPath string, ignoredDirs []string) (Refreshed
 // Editing a file only shifts line numbers inside that file, so every other row
 // in the index stays valid and never has to be rebuilt.
 func ReindexFile(db *sqlx.DB, rootPath, path string, ignoredDirs []string) error {
+	return reindexFileWithContent(db, rootPath, path, nil, false, ignoredDirs)
+}
+
+// ReindexFileContent replaces the stored chunks and manifest row of a single
+// file using already-known file bytes so callers that just wrote the file do
+// not re-read it from disk.
+func ReindexFileContent(db *sqlx.DB, rootPath, path string, content []byte, ignoredDirs []string) error {
+	return reindexFileWithContent(db, rootPath, path, content, true, ignoredDirs)
+}
+
+func reindexFileWithContent(db *sqlx.DB, rootPath, path string, content []byte, hasContent bool, ignoredDirs []string) error {
 	rel, err := relativePath(rootPath, path)
 	if err != nil {
 		return err
@@ -57,7 +68,7 @@ func ReindexFile(db *sqlx.DB, rootPath, path string, ignoredDirs []string) error
 		return err
 	}
 
-	if err := reindexFile(tx, writer, rel, path, ignoredDirs); err != nil {
+	if err := reindexFile(tx, writer, rel, path, content, hasContent, ignoredDirs); err != nil {
 		writer.Close()
 		return err
 	}
@@ -74,24 +85,30 @@ func ReindexFile(db *sqlx.DB, rootPath, path string, ignoredDirs []string) error
 
 // reindexFile is the body of ReindexFile, split out so every early return still
 // goes through the single commit above.
-func reindexFile(tx *sqlx.Tx, writer *database.Writer, rel, path string, ignoredDirs []string) error {
+func reindexFile(tx *sqlx.Tx, writer *database.Writer, rel, path string, content []byte, hasContent bool, ignoredDirs []string) error {
 	if filesystem.PathHasIgnoredDir(rel, ignoredDirs) {
 		// The file lives under a directory the project ignores, so editing it
 		// directly must not smuggle it back into the index.
 		return database.Remove(tx, rel)
 	}
 
-	content, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			// The file is gone, so dropping its rows is the whole job.
-			return database.Remove(tx, rel)
+	if !hasContent {
+		var err error
+		content, err = os.ReadFile(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				// The file is gone, so dropping its rows is the whole job.
+				return database.Remove(tx, rel)
+			}
+			return fmt.Errorf("failed to read %s: %w", rel, err)
 		}
-		return fmt.Errorf("failed to read %s: %w", rel, err)
 	}
 
 	info, err := os.Stat(path)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return database.Remove(tx, rel)
+		}
 		return fmt.Errorf("failed to stat %s: %w", rel, err)
 	}
 	if !filesystem.IsIndexableFile(info) {
