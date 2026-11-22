@@ -2,8 +2,6 @@ package mcpserver
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/synt4xer/proxer/internal/domain"
@@ -36,11 +34,6 @@ type editInput struct {
 	End      int    `json:"end" jsonschema:"last line to replace, inclusive"`
 	Content  string `json:"content" jsonschema:"replacement text for the line range; it need not have the same number of lines as the range"`
 	Hash     string `json:"hash,omitempty" jsonschema:"hash returned by an earlier read of this file; when set, the edit is rejected if the file changed since that read"`
-}
-
-type editOutput struct {
-	Status  string `json:"status" jsonschema:"human-readable result status"`
-	Message string `json:"message" jsonschema:"details of the edit"`
 }
 
 func (s *Server) registerTools() {
@@ -88,7 +81,7 @@ func (s *Server) addSearchTool() {
 			"and whether its terms matched the path, the content, or both. " +
 			"Empty or punctuation-only input returns no matches.",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in searchInput) (*mcp.CallToolResult, domain.SearchResponse, error) {
-		resultJSON, err := tools.PerformSearch(s.db, s.root, in.Keyword, tools.SearchOptions{
+		response, err := tools.PerformSearch(s.db, s.root, in.Keyword, tools.SearchOptions{
 			NoRefresh:   s.noRefresh,
 			IgnoredDirs: s.ignoredDirs,
 			Limit:       in.Limit,
@@ -96,11 +89,6 @@ func (s *Server) addSearchTool() {
 		})
 		if err != nil {
 			return nil, domain.SearchResponse{}, err
-		}
-
-		var response domain.SearchResponse
-		if err := json.Unmarshal([]byte(resultJSON), &response); err != nil {
-			return nil, domain.SearchResponse{}, fmt.Errorf("decode search result: %w", err)
 		}
 		if response.Results == nil {
 			response.Results = []domain.SearchResultJSON{}
@@ -125,14 +113,9 @@ func (s *Server) addReadTool() {
 			end = 60
 		}
 
-		resultJSON, err := tools.PerformRead(s.root, in.Filepath, start, end)
+		result, err := tools.PerformRead(s.root, in.Filepath, start, end)
 		if err != nil {
 			return nil, domain.ReadResultJSON{}, err
-		}
-
-		var result domain.ReadResultJSON
-		if err := json.Unmarshal([]byte(resultJSON), &result); err != nil {
-			return nil, domain.ReadResultJSON{}, fmt.Errorf("decode read result: %w", err)
 		}
 		return nil, result, nil
 	})
@@ -146,15 +129,10 @@ func (s *Server) addEditTool() {
 			"The replacement need not have the same number of lines as the range. The file is written atomically. " +
 			"Pass the hash from a prior read of the same file: if the file changed since that read, the edit is rejected and nothing is written. " +
 			"Replacements containing the \" [truncated]\" marker or targeting lines exceeding 4096 characters are also rejected.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in editInput) (*mcp.CallToolResult, editOutput, error) {
-		resultJSON, err := tools.PerformEdit(s.db, s.root, in.Filepath, in.Start, in.End, in.Content, in.Hash, s.ignoredDirs)
+	}, func(_ context.Context, _ *mcp.CallToolRequest, in editInput) (*mcp.CallToolResult, domain.EditResultJSON, error) {
+		result, err := tools.PerformEdit(s.db, s.root, in.Filepath, in.Start, in.End, in.Content, in.Hash, s.ignoredDirs)
 		if err != nil {
-			return nil, editOutput{}, err
-		}
-
-		var result editOutput
-		if err := json.Unmarshal([]byte(resultJSON), &result); err != nil {
-			return nil, editOutput{}, fmt.Errorf("decode edit result: %w", err)
+			return nil, domain.EditResultJSON{}, err
 		}
 		return nil, result, nil
 	})

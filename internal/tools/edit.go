@@ -9,6 +9,7 @@ import (
 
 	"github.com/jmoiron/sqlx"
 	"github.com/synt4xer/proxer/internal/config"
+	"github.com/synt4xer/proxer/internal/domain"
 	"github.com/synt4xer/proxer/internal/indexer"
 )
 
@@ -19,24 +20,24 @@ import (
 // file changed after it was read, and the edit is refused. ignoredDirs is the
 // project's skip list, so editing a file inside an ignored directory does not
 // add it back to the index.
-func PerformEdit(db *sqlx.DB, root, path string, startLine, endLine int, newContent, expectedHash string, ignoredDirs []string) (string, error) {
+func PerformEdit(db *sqlx.DB, root, path string, startLine, endLine int, newContent, expectedHash string, ignoredDirs []string) (domain.EditResultJSON, error) {
 	resolved, err := resolvePath(root, path)
 	if err != nil {
-		return "", err
+		return domain.EditResultJSON{}, err
 	}
 
 	if _, err := os.Stat(resolved); os.IsNotExist(err) {
-		return "", fmt.Errorf("file '%s' not found", path)
+		return domain.EditResultJSON{}, fmt.Errorf("file '%s' not found", path)
 	}
 
 	contentBytes, err := os.ReadFile(resolved)
 	if err != nil {
-		return "", fmt.Errorf("failed to read file: %w", err)
+		return domain.EditResultJSON{}, fmt.Errorf("failed to read file: %w", err)
 	}
 
 	if expectedHash != "" {
 		if current := indexer.ContentHash(contentBytes); current != expectedHash {
-			return "", fmt.Errorf("file '%s' changed since it was read. Read it again before editing", path)
+			return domain.EditResultJSON{}, fmt.Errorf("file '%s' changed since it was read. Read it again before editing", path)
 		}
 	}
 
@@ -44,17 +45,17 @@ func PerformEdit(db *sqlx.DB, root, path string, startLine, endLine int, newCont
 	totalLines := len(lines)
 
 	if startLine < 1 || startLine > totalLines || endLine < startLine || endLine > totalLines {
-		return "", fmt.Errorf("invalid line range. The file has %d lines", totalLines)
+		return domain.EditResultJSON{}, fmt.Errorf("invalid line range. The file has %d lines", totalLines)
 	}
 
 	if strings.Contains(newContent, config.TruncationMarker) {
-		return "", fmt.Errorf("refusing to edit '%s': replacement content contains truncation marker %q", path, config.TruncationMarker)
+		return domain.EditResultJSON{}, fmt.Errorf("refusing to edit '%s': replacement content contains truncation marker %q", path, config.TruncationMarker)
 	}
 
 	for i := startLine; i <= endLine; i++ {
 		line := strings.TrimSuffix(lines[i-1], "\r")
 		if len(line) > config.MaxLineWidth && utf8.RuneCountInString(line) > config.MaxLineWidth {
-			return "", fmt.Errorf("refusing to edit '%s': line %d exceeds %d characters and is truncated by read", path, i, config.MaxLineWidth)
+			return domain.EditResultJSON{}, fmt.Errorf("refusing to edit '%s': line %d exceeds %d characters and is truncated by read", path, i, config.MaxLineWidth)
 		}
 	}
 
@@ -68,26 +69,21 @@ func PerformEdit(db *sqlx.DB, root, path string, startLine, endLine int, newCont
 	finalLines = append(finalLines, cleanNewContent)
 	finalLines = append(finalLines, suffix...)
 
-	finalContent := strings.Join(finalLines, "\n")
+	finalBytes := []byte(strings.Join(finalLines, "\n"))
 
-	if err := writeFileAtomically(resolved, []byte(finalContent)); err != nil {
-		return "", fmt.Errorf("failed to save file: %w", err)
+	if err := writeFileAtomically(resolved, finalBytes); err != nil {
+		return domain.EditResultJSON{}, fmt.Errorf("failed to save file: %w", err)
 	}
 
-	err = indexer.ReindexFile(db, root, resolved, ignoredDirs)
+	err = indexer.ReindexFileContent(db, root, resolved, finalBytes, ignoredDirs)
 	if err != nil {
-		return "", fmt.Errorf("file saved, but reindexing it failed: %w", err)
+		return domain.EditResultJSON{}, fmt.Errorf("file saved, but reindexing it failed: %w", err)
 	}
 
-	successMsg := map[string]string{
-		"status":  "success",
-		"message": fmt.Sprintf("Successfully replaced lines %d-%d in %s and reindexed it.", startLine, endLine, path),
-	}
-	out, err := encodeJSON(successMsg)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal JSON: %w", err)
-	}
-	return out, nil
+	return domain.EditResultJSON{
+		Status:  "success",
+		Message: fmt.Sprintf("Successfully replaced lines %d-%d in %s and reindexed it.", startLine, endLine, path),
+	}, nil
 }
 
 // writeFileAtomically replaces path through a temporary file in the same

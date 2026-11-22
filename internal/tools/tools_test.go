@@ -1,7 +1,6 @@
 package tools_test
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -71,13 +70,10 @@ func TestToolsSuite(t *testing.T) {
 	})
 
 	t.Run("PerformRead", func(t *testing.T) {
-		resultJSON, err := tools.PerformRead(root, "main.go", 4, 5)
+		result, err := tools.PerformRead(root, "main.go", 4, 5)
 		require.NoError(t, err)
-		assert.Contains(t, resultJSON, "func ProcessData()")
-		assert.Contains(t, resultJSON, "fmt.Println")
-
-		var result domain.ReadResultJSON
-		require.NoError(t, json.Unmarshal([]byte(resultJSON), &result))
+		assert.Contains(t, result.Content, "func ProcessData()")
+		assert.Contains(t, result.Content, "fmt.Println")
 		assert.Equal(t, root, result.Root, "a read result must name the index it came from")
 		assert.Len(t, result.Hash, 64, "a read result must carry a sha256 of the file")
 
@@ -90,17 +86,17 @@ func TestToolsSuite(t *testing.T) {
 		// A harness may spawn proxer from an unrelated directory.
 		t.Chdir(t.TempDir())
 
-		resultJSON, err := tools.PerformRead(root, "main.go", 4, 4)
+		result, err := tools.PerformRead(root, "main.go", 4, 4)
 		require.NoError(t, err, "relative paths must resolve against the project root")
-		assert.Contains(t, resultJSON, "func ProcessData()")
-		assert.Contains(t, resultJSON, `"filepath":"main.go"`, "the path must be echoed as given")
+		assert.Contains(t, result.Content, "func ProcessData()")
+		assert.Equal(t, "main.go", result.Filepath, "the path must be echoed as given")
 	})
 
 	t.Run("PerformReadAcceptsAbsolutePathsInsideTheRoot", func(t *testing.T) {
 		absolute := filepath.Join(root, "main.go")
-		resultJSON, err := tools.PerformRead(root, absolute, 1, 1)
+		result, err := tools.PerformRead(root, absolute, 1, 1)
 		require.NoError(t, err)
-		assert.Contains(t, resultJSON, "package main")
+		assert.Contains(t, result.Content, "package main")
 	})
 
 	t.Run("PerformReadRejectsPathsOutsideTheRoot", func(t *testing.T) {
@@ -165,9 +161,9 @@ func TestToolsSuite(t *testing.T) {
 	t.Run("PerformEdit", func(t *testing.T) {
 		newContent := "\tfmt.Println(\"Data Processed Successfully\")\n\treturn true"
 
-		resultJSON, err := tools.PerformEdit(db, root, "main.go", 5, 7, newContent, "", config.DefaultIgnoredDirs)
+		editRes, err := tools.PerformEdit(db, root, "main.go", 5, 7, newContent, "", config.DefaultIgnoredDirs)
 		require.NoError(t, err)
-		assert.Contains(t, resultJSON, "success")
+		assert.Equal(t, "success", editRes.Status)
 
 		updatedBytes, err := os.ReadFile(filepath.Join(root, "main.go"))
 		require.NoError(t, err)
@@ -175,12 +171,12 @@ func TestToolsSuite(t *testing.T) {
 		assert.Contains(t, updatedContent, "Data Processed Successfully")
 		assert.NotContains(t, updatedContent, "We need to change this logic later")
 
-		searchResult := searchJSON(t, db, root, "Successfully")
-		assert.Contains(t, searchResult, "main.go", "auto-reindex failed to register new content")
+		searchResult := searchAll(t, db, root, "Successfully")
+		assert.Contains(t, resultPaths(searchResult), "main.go", "auto-reindex failed to register new content")
 
 		// The stale line must be gone from the index too, not only from disk.
-		staleResult := searchJSON(t, db, root, "Processing")
-		assert.NotContains(t, staleResult, "We need to change this logic later")
+		staleResult := searchAll(t, db, root, "Processing")
+		assert.Empty(t, staleResult.Results)
 	})
 
 	t.Run("PerformEditReindexesOnlyTheEditedFile", func(t *testing.T) {
@@ -216,10 +212,8 @@ func TestPerformEditRejectsAStaleHash(t *testing.T) {
 
 	readHash := func(t *testing.T) string {
 		t.Helper()
-		resultJSON, err := tools.PerformRead(root, "main.go", 5, 7)
+		result, err := tools.PerformRead(root, "main.go", 5, 7)
 		require.NoError(t, err)
-		var result domain.ReadResultJSON
-		require.NoError(t, json.Unmarshal([]byte(resultJSON), &result))
 		require.NotEmpty(t, result.Hash)
 		return result.Hash
 	}
@@ -432,13 +426,17 @@ func TestJSONOutputIsNotHTMLEscaped(t *testing.T) {
 	mustIndex(t, db, root, config.DefaultIgnoredDirs)
 
 	t.Run("searchKeepsSnippetTagsLiteral", func(t *testing.T) {
-		resultJSON := searchJSON(t, db, root, "ProcessData")
+		result := searchAll(t, db, root, "ProcessData")
+		resultJSON, err := tools.EncodeJSON(result)
+		require.NoError(t, err)
 		assert.Contains(t, resultJSON, "<b>ProcessData</b>")
 		assert.NotContains(t, resultJSON, `\u003c`)
 	})
 
 	t.Run("readKeepsContentLiteral", func(t *testing.T) {
-		resultJSON, err := tools.PerformRead(root, "page.html", 1, 1)
+		result, err := tools.PerformRead(root, "page.html", 1, 1)
+		require.NoError(t, err)
+		resultJSON, err := tools.EncodeJSON(result)
 		require.NoError(t, err)
 		assert.Contains(t, resultJSON, "<div>a & b</div>")
 		assert.NotContains(t, resultJSON, `\u003c`)
@@ -500,14 +498,6 @@ func TestWriteFileAtomicallyKeepsTheContract(t *testing.T) {
 // list in force.
 var toolSearchOptions = tools.SearchOptions{IgnoredDirs: config.DefaultIgnoredDirs}
 
-func searchJSON(t *testing.T, db *sqlx.DB, root, keyword string) string {
-	t.Helper()
-
-	resultJSON, err := tools.PerformSearch(db, root, keyword, toolSearchOptions)
-	require.NoError(t, err)
-	return resultJSON
-}
-
 func searchAll(t *testing.T, db *sqlx.DB, root, keyword string) domain.SearchResponse {
 	t.Helper()
 
@@ -518,11 +508,8 @@ func searchWith(t *testing.T, db *sqlx.DB, root, keyword string, opts tools.Sear
 	t.Helper()
 
 	opts.IgnoredDirs = config.DefaultIgnoredDirs
-	resultJSON, err := tools.PerformSearch(db, root, keyword, opts)
+	response, err := tools.PerformSearch(db, root, keyword, opts)
 	require.NoError(t, err)
-
-	var response domain.SearchResponse
-	require.NoError(t, json.Unmarshal([]byte(resultJSON), &response))
 	return response
 }
 
@@ -577,11 +564,8 @@ func TestSearchWithoutRefreshTrustsTheIndex(t *testing.T) {
 	require.NoError(t, os.WriteFile(outside, []byte("func WrittenByAnotherTool() {}\n"), 0o644))
 
 	opts := tools.SearchOptions{NoRefresh: true, IgnoredDirs: config.DefaultIgnoredDirs}
-	resultJSON, err := tools.PerformSearch(db, root, "WrittenByAnotherTool", opts)
+	response, err := tools.PerformSearch(db, root, "WrittenByAnotherTool", opts)
 	require.NoError(t, err)
-
-	var response domain.SearchResponse
-	require.NoError(t, json.Unmarshal([]byte(resultJSON), &response))
 	assert.Empty(t, response.Results, "without a refresh the new file must stay invisible")
 	assert.Nil(t, response.Refreshed, "no refresh must be reported as not attempted, not as zero changes")
 
@@ -601,11 +585,8 @@ func TestPerformReadLongLines(t *testing.T) {
 	require.NoError(t, os.WriteFile(longPath, []byte(longLine), 0o644))
 
 	t.Run("single-line 100KB file reads back without ceiling and stays bounded", func(t *testing.T) {
-		resultJSON, err := tools.PerformRead(root, "longline.txt", 1, 1)
+		result, err := tools.PerformRead(root, "longline.txt", 1, 1)
 		require.NoError(t, err)
-
-		var result domain.ReadResultJSON
-		require.NoError(t, json.Unmarshal([]byte(resultJSON), &result))
 
 		expectedContent := strings.Repeat("A", config.MaxLineWidth) + config.TruncationMarker + "\n"
 		assert.Equal(t, expectedContent, result.Content)
@@ -634,11 +615,8 @@ func TestPerformReadLongLines(t *testing.T) {
 		mixedPath := filepath.Join(root, "mixed.go")
 		require.NoError(t, os.WriteFile(mixedPath, []byte(mixedContent), 0o644))
 
-		resultJSON, err := tools.PerformRead(root, "mixed.go", 1, 3)
+		result, err := tools.PerformRead(root, "mixed.go", 1, 3)
 		require.NoError(t, err)
-
-		var result domain.ReadResultJSON
-		require.NoError(t, json.Unmarshal([]byte(resultJSON), &result))
 		assert.Contains(t, result.Content, config.TruncationMarker)
 
 		// Editing a range that spans the long line (line 2) is refused.
@@ -650,7 +628,7 @@ func TestPerformReadLongLines(t *testing.T) {
 		// and preserves the untruncated 100 KB line 2 intact.
 		editRes, err := tools.PerformEdit(db, root, "mixed.go", 3, 3, "func Updated() {}", result.Hash, config.DefaultIgnoredDirs)
 		require.NoError(t, err)
-		assert.Contains(t, editRes, "success")
+		assert.Equal(t, "success", editRes.Status)
 
 		onDisk, readErr := os.ReadFile(mixedPath)
 		require.NoError(t, readErr)
@@ -663,11 +641,8 @@ func TestPerformReadLongLines(t *testing.T) {
 		minPath := filepath.Join(root, "bundle.min.js")
 		require.NoError(t, os.WriteFile(minPath, []byte(minified), 0o644))
 
-		resultJSON, err := tools.PerformRead(root, "bundle.min.js", 1, 1)
+		result, err := tools.PerformRead(root, "bundle.min.js", 1, 1)
 		require.NoError(t, err)
-
-		var result domain.ReadResultJSON
-		require.NoError(t, json.Unmarshal([]byte(resultJSON), &result))
 
 		assert.Contains(t, result.Content, config.TruncationMarker)
 		assert.Less(t, len(result.Content), fiftyKB/5, "payload must stay bounded")

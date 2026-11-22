@@ -14,37 +14,56 @@ func TestSearchTermsAndMatchPart(t *testing.T) {
 		name     string
 		terms    []string
 		filePath string
+		content  string
 		expected string
 	}{
 		{
 			name:     "a token that only names the file is a path hit",
 			terms:    []string{"000001"},
 			filePath: "db/migrations/mysql/000001_init.up.sql",
+			content:  "CREATE TABLE users (id INT);",
 			expected: "path",
 		},
 		{
 			name:     "a token that is not in the path matched the body",
 			terms:    []string{"create"},
 			filePath: "db/migrations/mysql/000001_init.up.sql",
+			content:  "CREATE TABLE users (id INT);",
 			expected: "content",
 		},
 		{
 			name:     "one term in the path and one in the body is both",
 			terms:    []string{"mysql", "create"},
 			filePath: "db/migrations/mysql/000001_init.up.sql",
+			content:  "CREATE TABLE users (id INT);",
 			expected: "both",
 		},
 		{
 			name:     "path matching is case-insensitive",
 			terms:    []string{"MYSQL"},
 			filePath: "db/migrations/mysql/000001_init.up.sql",
+			content:  "CREATE TABLE users (id INT);",
 			expected: "path",
+		},
+		{
+			name:     "multi-term OR where unmatched term is absent from path and content is path only",
+			terms:    []string{"mysql", "nonexistent"},
+			filePath: "db/migrations/mysql/000001_init.up.sql",
+			content:  "CREATE TABLE users (id INT);",
+			expected: "path",
+		},
+		{
+			name:     "term present in both path and content is both",
+			terms:    []string{"mysql"},
+			filePath: "db/migrations/mysql/000001_init.up.sql",
+			content:  "-- mysql migration",
+			expected: "both",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.expected, matchPart(tt.terms, tt.filePath))
+			assert.Equal(t, tt.expected, matchPart(tt.terms, tt.filePath, tt.content))
 		})
 	}
 }

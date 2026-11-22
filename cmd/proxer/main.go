@@ -91,7 +91,7 @@ func main() {
 				os.Exit(1)
 			}
 
-			resultJSON, err := tools.PerformSearch(db, root, keyword, tools.SearchOptions{
+			result, err := tools.PerformSearch(db, root, keyword, tools.SearchOptions{
 				NoRefresh:   noRefresh || config.RefreshDisabled(),
 				IgnoredDirs: ignoredDirs,
 				Limit:       limit,
@@ -101,7 +101,7 @@ func main() {
 				fmt.Fprintln(os.Stderr, err.Error())
 				os.Exit(1)
 			}
-			fmt.Println(resultJSON)
+			printJSON(result)
 		},
 	}
 	searchCmd.Flags().StringVarP(&keyword, "keyword", "k", "", "Keyword for FTS5 search (required)")
@@ -121,12 +121,12 @@ func main() {
 				os.Exit(1)
 			}
 
-			resultJSON, err := tools.PerformRead(root, filepathFlag, startLine, endLine)
+			result, err := tools.PerformRead(root, filepathFlag, startLine, endLine)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, err.Error())
 				os.Exit(1)
 			}
-			fmt.Println(resultJSON)
+			printJSON(result)
 		},
 	}
 	readCmd.Flags().StringVarP(&filepathFlag, "filepath", "f", "", "Path to the file (required)")
@@ -151,12 +151,12 @@ func main() {
 				os.Exit(1)
 			}
 
-			resultJSON, err := tools.PerformEdit(db, root, editFilepath, editStart, editEnd, string(newContentBytes), editHash, ignoredDirs)
+			result, err := tools.PerformEdit(db, root, editFilepath, editStart, editEnd, string(newContentBytes), editHash, ignoredDirs)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, err.Error())
 				os.Exit(1)
 			}
-			fmt.Println(resultJSON)
+			printJSON(result)
 		},
 	}
 	editCmd.Flags().StringVarP(&editFilepath, "filepath", "f", "", "Path to file")
@@ -173,4 +173,13 @@ func main() {
 		fmt.Fprintf(os.Stderr, "CLI execution error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func printJSON(v any) {
+	out, err := tools.EncodeJSON(v)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to marshal JSON: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println(out)
 }
