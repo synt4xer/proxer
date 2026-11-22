@@ -115,12 +115,10 @@ func (w *Writer) writeLines(rel string, lines []string) error {
 	}
 
 	extractTails := shouldExtractTails(rel)
-	for i := 0; i < totalLines; i += step {
+	for i := 0; i < totalLines; {
 		startLine := i + 1
-		endLine := i + w.chunking.Size
-		if endLine > totalLines {
-			endLine = totalLines
-		}
+		nominalEnd := i + w.chunking.Size
+		endLine := snapChunkEnd(lines, startLine, nominalEnd, totalLines, w.chunking.Size, step)
 
 		chunkContent := strings.Join(lines[startLine-1:endLine], "\n")
 		tails := ""
@@ -145,9 +143,82 @@ func (w *Writer) writeLines(rel string, lines []string) error {
 		if endLine >= totalLines {
 			break
 		}
+
+		next := endLine - w.chunking.Overlap
+		if next <= i {
+			next = i + 1
+		}
+		i = next
 	}
 
 	return nil
+}
+
+// snapChunkEnd adjusts nominalEnd within a small window around chunkSize so
+// chunks prefer ending at blank lines or just before zero-indent top-level
+// declarations instead of splitting mid-block. Small test windows (< 20 lines)
+// skip snapping to keep exact-line unit tests deterministic.
+func snapChunkEnd(lines []string, startLine, nominalEnd, totalLines, chunkSize, step int) int {
+	if nominalEnd >= totalLines {
+		return totalLines
+	}
+	if chunkSize < 20 {
+		return nominalEnd
+	}
+
+	snapWindow := min(8, step/3)
+	if snapWindow <= 0 {
+		return nominalEnd
+	}
+
+	minEnd := max(startLine+step/2, nominalEnd-snapWindow)
+	maxEnd := min(totalLines-1, nominalEnd+snapWindow)
+
+	bestEnd := nominalEnd
+	bestRank := 0
+	bestDist := snapWindow + 1
+
+	for candidate := minEnd; candidate <= maxEnd; candidate++ {
+		rank := boundaryRank(lines, candidate)
+		if rank == 0 {
+			continue
+		}
+		dist := candidate - nominalEnd
+		if dist < 0 {
+			dist = -dist
+		}
+		if rank > bestRank || (rank == bestRank && dist < bestDist) {
+			bestEnd = candidate
+			bestRank = rank
+			bestDist = dist
+		}
+	}
+
+	return bestEnd
+}
+
+func boundaryRank(lines []string, endLine int) int {
+	// endLine is 1-based and < len(lines), so lines[endLine-1] is the last line
+	// in the chunk and lines[endLine] is the first line after it.
+	if strings.TrimSpace(lines[endLine-1]) == "" || strings.TrimSpace(lines[endLine]) == "" {
+		return 2
+	}
+	if isZeroIndentBoundary(lines[endLine]) {
+		return 1
+	}
+	return 0
+}
+
+func isZeroIndentBoundary(line string) bool {
+	if line == "" {
+		return false
+	}
+	first := line[0]
+	if first == ' ' || first == '\t' || first == '\r' {
+		return false
+	}
+	// Closing delimiters belong with the preceding block rather than starting a new one.
+	return first != '}' && first != ')' && first != ']'
 }
 
 // DeleteChunks drops every row stored under rel. The rowids come from
