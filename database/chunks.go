@@ -8,8 +8,8 @@ import (
 )
 
 const insertChunkSQL = `
-	INSERT INTO chunk_search (id, filepath, start_line, end_line, content)
-	VALUES (?, ?, ?, ?, ?)
+	INSERT INTO chunk_search (id, filepath, start_line, end_line, content, tails)
+	VALUES (?, ?, ?, ?, ?, ?)
 `
 
 const insertChunkMapSQL = `
@@ -107,6 +107,7 @@ func (w *Writer) write(rel, content string) error {
 		return fmt.Errorf("chunk size %d must exceed overlap %d", w.chunking.Size, w.chunking.Overlap)
 	}
 
+	extractTails := shouldExtractTails(rel)
 	for i := 0; i < totalLines; i += step {
 		startLine := i + 1
 		endLine := i + w.chunking.Size
@@ -115,9 +116,13 @@ func (w *Writer) write(rel, content string) error {
 		}
 
 		chunkContent := strings.Join(lines[startLine-1:endLine], "\n")
+		tails := ""
+		if extractTails {
+			tails = identifierTails(chunkContent)
+		}
 		id := fmt.Sprintf("%s:%d-%d", rel, startLine, endLine)
 
-		result, err := w.insert.Exec(id, rel, startLine, endLine, chunkContent)
+		result, err := w.insert.Exec(id, rel, startLine, endLine, chunkContent, tails)
 		if err != nil {
 			return fmt.Errorf("failed to store chunk %s: %w", id, err)
 		}
