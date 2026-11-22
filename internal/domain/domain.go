@@ -4,7 +4,9 @@ type SearchResultDB struct {
 	Filepath  string `db:"filepath"`
 	StartLine int    `db:"start_line"`
 	EndLine   int    `db:"end_line"`
+	Content   string `db:"content"`
 	Snippet   string `db:"snippet"`
+	Total     int    `db:"total"`
 }
 
 // RefreshSummary reports what the pre-search refresh changed. It is omitted when
@@ -46,4 +48,9 @@ type ReadResultJSON struct {
 	Filepath string `json:"filepath"`
 	Content  string `json:"content"`
 	Hash     string `json:"hash"`
+}
+
+type EditResultJSON struct {
+	Status  string `json:"status" jsonschema:"human-readable result status"`
+	Message string `json:"message" jsonschema:"details of the edit"`
 }

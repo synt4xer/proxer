@@ -6,13 +6,13 @@ import (
 	"strings"
 )
 
-// encodeJSON serializes v like json.Marshal but without HTML escaping.
+// EncodeJSON serializes v like json.Marshal but without HTML escaping.
 // Search snippets wrap matches in <b> tags, and encoding those as \u003c makes
 // stdout needlessly hard to read. Angle brackets are valid inside a JSON string;
 // escaping them only matters when the JSON is embedded in HTML, which is not
 // what this CLI emits. The encoder's trailing newline is dropped so callers keep
 // printing exactly one line.
-func encodeJSON(v any) (string, error) {
+func EncodeJSON(v any) (string, error) {
 	var buf bytes.Buffer
 	encoder := json.NewEncoder(&buf)
 	encoder.SetEscapeHTML(false)
