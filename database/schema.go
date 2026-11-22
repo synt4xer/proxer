@@ -34,7 +34,8 @@ var schemaStatements = []string{
 		filepath,
 		start_line UNINDEXED,
 		end_line UNINDEXED,
-		content
+		content,
+		tails
 	);`,
 	`CREATE TABLE IF NOT EXISTS index_chunks (
 		rowid INTEGER PRIMARY KEY,
@@ -106,10 +107,11 @@ func StampIndexedAt(tx *sqlx.Tx) error {
 // delta against it would re-insert rows without dropping the old ones, so
 // wiping is the only correct starting point.
 func migrate(db *sqlx.DB, chunking Chunking) error {
-	for _, statement := range schemaStatements {
-		if _, err := db.Exec(statement); err != nil {
-			return fmt.Errorf("failed to create the index tables: %w", err)
-		}
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS meta (
+		key TEXT PRIMARY KEY,
+		value TEXT NOT NULL
+	);`); err != nil {
+		return fmt.Errorf("failed to create the meta table: %w", err)
 	}
 
 	version, err := metaValue(db, metaSchemaVersion)
@@ -129,15 +131,21 @@ func migrate(db *sqlx.DB, chunking Chunking) error {
 		chunkSize == strconv.Itoa(chunking.Size) &&
 		overlap == strconv.Itoa(chunking.Overlap)
 	if current {
+		for _, statement := range schemaStatements {
+			if _, err := db.Exec(statement); err != nil {
+				return fmt.Errorf("failed to create the index tables: %w", err)
+			}
+		}
 		return nil
 	}
 
 	return reset(db, chunking)
 }
 
-// reset drops every stored row and stamps the current schema. The wipe and the
-// stamp share a transaction, so an interrupted reset cannot leave a half-cleared
-// index that claims to be current.
+// reset drops every stored table, recreates the schema, and stamps the current
+// version. Dropping rather than deleting lets schema_version bumps add or
+// reshape FTS5 columns cleanly, and keeping the stamp in the same transaction
+// ensures an interrupted reset cannot leave a half-cleared index.
 func reset(db *sqlx.DB, chunking Chunking) error {
 	tx, err := db.Beginx()
 	if err != nil {
@@ -146,12 +154,18 @@ func reset(db *sqlx.DB, chunking Chunking) error {
 	defer tx.Rollback()
 
 	for _, statement := range []string{
-		"DELETE FROM chunk_search",
-		"DELETE FROM index_chunks",
-		"DELETE FROM indexed_files",
+		"DROP TABLE IF EXISTS chunk_search",
+		"DROP TABLE IF EXISTS index_chunks",
+		"DROP TABLE IF EXISTS indexed_files",
 	} {
 		if _, err := tx.Exec(statement); err != nil {
-			return fmt.Errorf("failed to clear a stale index: %w", err)
+			return fmt.Errorf("failed to drop a stale index table: %w", err)
+		}
+	}
+
+	for _, statement := range schemaStatements {
+		if _, err := tx.Exec(statement); err != nil {
+			return fmt.Errorf("failed to create the index tables: %w", err)
 		}
 	}
 
