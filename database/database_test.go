@@ -137,3 +137,30 @@ func TestRemoveDropsBothStores(t *testing.T) {
 	assert.Len(t, manifest, 1, "the surviving file must still be in the manifest")
 	assert.Equal(t, database.FileRecord{Path: "b.go", Size: 8, Hash: "h"}, manifest["b.go"])
 }
+
+func TestOpenUpgradesLegacyV1Schema(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.db")
+
+	// Simulate a v1 database whose chunk_search lacks the tails column.
+	raw, err := sqlx.Connect("sqlite", path)
+	require.NoError(t, err)
+	for _, stmt := range []string{
+		`CREATE VIRTUAL TABLE chunk_search USING fts5(id UNINDEXED, filepath, start_line UNINDEXED, end_line UNINDEXED, content);`,
+		`CREATE TABLE index_chunks (rowid INTEGER PRIMARY KEY, filepath TEXT NOT NULL);`,
+		`CREATE TABLE indexed_files (filepath TEXT PRIMARY KEY, size INTEGER NOT NULL, mtime_ns INTEGER NOT NULL, hash TEXT NOT NULL);`,
+		`CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);`,
+		`INSERT INTO meta (key, value) VALUES ('schema_version', '1'), ('chunk_size', '4'), ('overlap_size', '1');`,
+	} {
+		_, execErr := raw.Exec(stmt)
+		require.NoError(t, execErr)
+	}
+	require.NoError(t, raw.Close())
+
+	db := open(t, path, window)
+	store(t, db, window, database.FileRecord{Path: "a.go", Size: 16, Hash: "h"}, "func AuthMiddleware() {}\n", false)
+
+	var version string
+	require.NoError(t, db.Get(&version, "SELECT value FROM meta WHERE key = 'schema_version'"))
+	assert.Equal(t, database.SchemaVersion, version)
+	assert.Equal(t, 1, count(t, db, "SELECT COUNT(*) FROM chunk_search WHERE chunk_search MATCH 'middleware'"))
+}

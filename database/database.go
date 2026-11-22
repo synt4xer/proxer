@@ -19,7 +19,7 @@ import (
 // chunker, or the meaning of a stored row changes: a database stamped with
 // another value is cleared and rebuilt from the tree, which is cheaper and
 // safer than migrating rows whose provenance is unknown.
-const SchemaVersion = "1"
+const SchemaVersion = "2"
 
 // Chunking is the window the stored chunks were built with. It is recorded in
 // the meta table because a database chunked differently cannot answer the same
