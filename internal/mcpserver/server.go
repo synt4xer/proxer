@@ -5,11 +5,15 @@ package mcpserver
 import (
 	"context"
 	"errors"
+	"sync"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/synt4xer/proxer/internal/config"
 )
+
+const defaultRefreshCooldown = 2 * time.Second
 
 // Version is reported to MCP clients during initialization.
 const Version = "0.5.0"
@@ -20,11 +24,15 @@ Paths passed to read and edit are relative to the project root; absolute paths i
 
 // Server serves one MCP client against one project root.
 type Server struct {
-	db          *sqlx.DB
-	root        string
-	ignoredDirs []string
-	noRefresh   bool
-	mcp         *mcp.Server
+	db              *sqlx.DB
+	root            string
+	ignoredDirs     []string
+	noRefresh       bool
+	refreshCooldown time.Duration
+	now             func() time.Time
+	mu              sync.Mutex
+	lastRefreshAt   time.Time
+	mcp             *mcp.Server
 }
 
 // New builds the MCP server for a project root. The caller owns db and must
@@ -33,7 +41,14 @@ func New(db *sqlx.DB, root string, ignoredDirs []string) *Server {
 	// A harness spawns the server once, so the environment is read here rather
 	// than per tool call. PROXER_NO_REFRESH=1 turns every search into a pure
 	// read, which is the escape hatch for a caller that must not write.
-	s := &Server{db: db, root: root, ignoredDirs: ignoredDirs, noRefresh: config.RefreshDisabled()}
+	s := &Server{
+		db:              db,
+		root:            root,
+		ignoredDirs:     ignoredDirs,
+		noRefresh:       config.RefreshDisabled(),
+		refreshCooldown: defaultRefreshCooldown,
+		now:             time.Now,
+	}
 	s.mcp = mcp.NewServer(
 		&mcp.Implementation{Name: "proxer", Version: Version},
 		&mcp.ServerOptions{Instructions: instructions},
