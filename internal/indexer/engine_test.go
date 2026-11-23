@@ -34,7 +34,7 @@ func newWorkspace(t *testing.T) string {
 func TestIndexerEngine(t *testing.T) {
 	root := newWorkspace(t)
 
-	db, err := database.Open(filepath.Join(root, config.DBFile), indexer.Chunking())
+	db, err := database.Open(filepath.Join(root, config.DBFile), database.OpenOptions{Chunking: indexer.Chunking()})
 	require.NoError(t, err, "InitDB should not produce an error")
 	defer db.Close()
 
@@ -67,7 +67,7 @@ func TestIndexProjectStoresIdenticalPathsForAbsoluteAndRelativeRoots(t *testing.
 
 	var indexed []string
 	for _, candidate := range []string{root, filepath.Join(filepath.Dir(root), relRoot)} {
-		db, err := database.Open(filepath.Join(root, config.DBFile), indexer.Chunking())
+		db, err := database.Open(filepath.Join(root, config.DBFile), database.OpenOptions{Chunking: indexer.Chunking()})
 		require.NoError(t, err)
 
 		mustIndex(t, db, candidate, config.DefaultIgnoredDirs)
@@ -90,7 +90,7 @@ func TestIndexProjectHandlesIgnoredDirectoryAsRoot(t *testing.T) {
 	require.NoError(t, os.MkdirAll(root, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "main.go"), []byte("func Build() {}\n"), 0o644))
 
-	db, err := database.Open(filepath.Join(root, config.DBFile), indexer.Chunking())
+	db, err := database.Open(filepath.Join(root, config.DBFile), database.OpenOptions{Chunking: indexer.Chunking()})
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -106,7 +106,7 @@ func TestIndexProjectHonorsAProjectSkipList(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "generated"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "generated", "gen.go"), []byte("func Gen() {}\n"), 0o644))
 
-	db, err := database.Open(filepath.Join(root, config.DBFile), indexer.Chunking())
+	db, err := database.Open(filepath.Join(root, config.DBFile), database.OpenOptions{Chunking: indexer.Chunking()})
 	require.NoError(t, err)
 	defer db.Close()
 

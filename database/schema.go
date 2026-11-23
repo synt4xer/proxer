@@ -11,10 +11,12 @@ import (
 )
 
 const (
-	metaSchemaVersion = "schema_version"
-	metaChunkSize     = "chunk_size"
-	metaOverlapSize   = "overlap_size"
-	metaIndexedAt     = "indexed_at"
+	metaSchemaVersion  = "schema_version"
+	metaChunkSize      = "chunk_size"
+	metaOverlapSize    = "overlap_size"
+	metaIndexedAt      = "indexed_at"
+	metaSensitivePurge = "sensitive_purge"
+	metaPurgePending   = "purge_pending"
 )
 
 // The index is four stores, not one:
@@ -101,6 +103,22 @@ func StampIndexedAt(tx *sqlx.Tx) error {
 	return setMeta(tx, metaIndexedAt, time.Now().UTC().Format(time.RFC3339Nano))
 }
 
+// PurgePending reports whether sensitive rows were deleted in Stage 1 and
+// unallocated DB pages or WAL frames still await Stage 2 reclamation.
+func PurgePending(db *sqlx.DB) (bool, error) {
+	val, err := metaValue(db, metaPurgePending)
+	if err != nil {
+		return false, err
+	}
+	return val == "1", nil
+}
+
+// ResetSensitivePurge clears the O(1) purge sentinel inside a write
+// transaction so that toggling index_sensitive back to false re-triggers Stage 1.
+func ResetSensitivePurge(tx *sqlx.Tx) error {
+	return setMeta(tx, metaSensitivePurge, "0")
+}
+
 // migrate creates every table the index needs and, when the database was built
 // by a different binary, empties it so the next build starts from the tree. A
 // pre-manifest database has chunks but no rowid map and no manifest: running a
@@ -172,10 +190,12 @@ func reset(db *sqlx.DB, chunking Chunking) error {
 	// indexed_at is cleared with the rows it described: a timestamp from a
 	// database that was just emptied would claim an index that does not exist.
 	for key, value := range map[string]string{
-		metaSchemaVersion: SchemaVersion,
-		metaChunkSize:     strconv.Itoa(chunking.Size),
-		metaOverlapSize:   strconv.Itoa(chunking.Overlap),
-		metaIndexedAt:     "",
+		metaSchemaVersion:  SchemaVersion,
+		metaChunkSize:      strconv.Itoa(chunking.Size),
+		metaOverlapSize:    strconv.Itoa(chunking.Overlap),
+		metaIndexedAt:      "",
+		metaSensitivePurge: "",
+		metaPurgePending:   "",
 	} {
 		if err := setMeta(tx, key, value); err != nil {
 			return err

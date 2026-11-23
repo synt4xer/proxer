@@ -24,7 +24,14 @@ func newMCPCommand(state *cliState) *cobra.Command {
 			manageDBAnnotation: "true",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			serverDB, err := database.Open(filepath.Join(state.root, config.DBFile), indexer.Chunking())
+			dbPath := state.dbPath
+			if dbPath == "" {
+				dbPath = filepath.Join(state.root, config.DBFile)
+			}
+			serverDB, err := database.Open(dbPath, database.OpenOptions{
+				Chunking:       indexer.Chunking(),
+				IndexSensitive: state.cfg.IndexSensitive,
+			})
 			if err != nil {
 				return fmt.Errorf("failed to initialize DB: %w", err)
 			}
@@ -33,7 +40,11 @@ func newMCPCommand(state *cliState) *cobra.Command {
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 
-			return mcpserver.New(serverDB, state.root, state.ignoredDirs).Run(ctx, &mcp.StdioTransport{})
+			return mcpserver.NewWithOptions(serverDB, state.root, mcpserver.Options{
+				IgnoredDirs:    state.cfg.IgnoredDirs,
+				IndexSensitive: state.cfg.IndexSensitive,
+				DBPath:         dbPath,
+			}).Run(ctx, &mcp.StdioTransport{})
 		},
 	}
 }

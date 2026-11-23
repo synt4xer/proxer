@@ -17,7 +17,7 @@ var window = database.Chunking{Size: 4, Overlap: 1}
 func open(t *testing.T, path string, chunking database.Chunking) *sqlx.DB {
 	t.Helper()
 
-	db, err := database.Open(path, chunking)
+	db, err := database.Open(path, database.OpenOptions{Chunking: chunking})
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 

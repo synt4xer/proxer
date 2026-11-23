@@ -12,6 +12,12 @@ import (
 	"github.com/synt4xer/proxer/internal/filesystem"
 )
 
+// IndexOptions configures project indexing and single-file reindexing.
+type IndexOptions struct {
+	IgnoredDirs    []string
+	IndexSensitive bool
+}
+
 // Chunking is the window this build chunks with. It is handed to database.Open
 // so a database built with another window is rebuilt instead of served.
 func Chunking() database.Chunking {
@@ -25,7 +31,12 @@ func Chunking() database.Chunking {
 // Refreshed and never opens a write transaction, which is what makes it cheap
 // enough to run before a search.
 func IndexProject(db *sqlx.DB, rootPath string, ignoredDirs []string) (Refreshed, error) {
-	diff, err := computeDiff(db, rootPath, ignoredDirs)
+	return IndexProjectWithOptions(db, rootPath, IndexOptions{IgnoredDirs: ignoredDirs})
+}
+
+// IndexProjectWithOptions runs IndexProject with full indexing options.
+func IndexProjectWithOptions(db *sqlx.DB, rootPath string, opts IndexOptions) (Refreshed, error) {
+	diff, err := computeDiff(db, rootPath, opts)
 	if err != nil {
 		return Refreshed{}, err
 	}
@@ -34,24 +45,30 @@ func IndexProject(db *sqlx.DB, rootPath string, ignoredDirs []string) (Refreshed
 		return Refreshed{}, nil
 	}
 
-	return applyDiff(db, rootPath, diff)
+	return applyDiff(db, rootPath, diff, opts)
 }
 
 // ReindexFile replaces the stored chunks and manifest row of a single file.
 // Editing a file only shifts line numbers inside that file, so every other row
 // in the index stays valid and never has to be rebuilt.
 func ReindexFile(db *sqlx.DB, rootPath, path string, ignoredDirs []string) error {
-	return reindexFileWithContent(db, rootPath, path, nil, false, ignoredDirs)
+	return reindexFileWithContent(db, rootPath, path, nil, false, IndexOptions{IgnoredDirs: ignoredDirs})
 }
 
 // ReindexFileContent replaces the stored chunks and manifest row of a single
 // file using already-known file bytes so callers that just wrote the file do
 // not re-read it from disk.
 func ReindexFileContent(db *sqlx.DB, rootPath, path string, content []byte, ignoredDirs []string) error {
-	return reindexFileWithContent(db, rootPath, path, content, true, ignoredDirs)
+	return reindexFileWithContent(db, rootPath, path, content, true, IndexOptions{IgnoredDirs: ignoredDirs})
 }
 
-func reindexFileWithContent(db *sqlx.DB, rootPath, path string, content []byte, hasContent bool, ignoredDirs []string) error {
+// ReindexFileContentWithOptions replaces the stored chunks and manifest row of
+// a single file using already-known bytes and full indexing options.
+func ReindexFileContentWithOptions(db *sqlx.DB, rootPath, path string, content []byte, opts IndexOptions) error {
+	return reindexFileWithContent(db, rootPath, path, content, true, opts)
+}
+
+func reindexFileWithContent(db *sqlx.DB, rootPath, path string, content []byte, hasContent bool, opts IndexOptions) error {
 	rel, err := relativePath(rootPath, path)
 	if err != nil {
 		return err
@@ -68,7 +85,7 @@ func reindexFileWithContent(db *sqlx.DB, rootPath, path string, content []byte, 
 		return err
 	}
 
-	if err := reindexFile(tx, writer, rel, path, content, hasContent, ignoredDirs); err != nil {
+	if err := reindexFile(tx, writer, rel, path, content, hasContent, opts); err != nil {
 		writer.Close()
 		return err
 	}
@@ -85,8 +102,8 @@ func reindexFileWithContent(db *sqlx.DB, rootPath, path string, content []byte, 
 
 // reindexFile is the body of ReindexFile, split out so every early return still
 // goes through the single commit above.
-func reindexFile(tx *sqlx.Tx, writer *database.Writer, rel, path string, content []byte, hasContent bool, ignoredDirs []string) error {
-	if filesystem.PathHasIgnoredDir(rel, ignoredDirs) {
+func reindexFile(tx *sqlx.Tx, writer *database.Writer, rel, path string, content []byte, hasContent bool, opts IndexOptions) error {
+	if filesystem.PathHasIgnoredDir(rel, opts.IgnoredDirs) {
 		// The file lives under a directory the project ignores, so editing it
 		// directly must not smuggle it back into the index.
 		return database.Remove(tx, rel)
@@ -111,10 +128,16 @@ func reindexFile(tx *sqlx.Tx, writer *database.Writer, rel, path string, content
 		}
 		return fmt.Errorf("failed to stat %s: %w", rel, err)
 	}
-	if !filesystem.IsIndexableFile(info) {
-		// The file grew past the size limit or lost an indexable extension:
-		// it must no longer be reachable through search.
+	if ok, _ := filesystem.IsIndexableFile(info, opts.IndexSensitive); !ok {
+		// The file grew past the size limit, is sensitive, or lost an indexable
+		// extension: it must no longer be reachable through search.
 		return database.Remove(tx, rel)
+	}
+
+	if opts.IndexSensitive || filesystem.IsSensitivePath(rel) {
+		if err := database.ResetSensitivePurge(tx); err != nil {
+			return err
+		}
 	}
 
 	entry := database.FileRecord{

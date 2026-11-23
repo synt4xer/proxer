@@ -19,7 +19,7 @@ import (
 func openWorkspaceDB(t *testing.T, root string) *sqlx.DB {
 	t.Helper()
 
-	db, err := database.Open(filepath.Join(root, config.DBFile), indexer.Chunking())
+	db, err := database.Open(filepath.Join(root, config.DBFile), database.OpenOptions{Chunking: indexer.Chunking()})
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 
@@ -134,7 +134,7 @@ func TestReindexFileWaitsForConcurrentWriters(t *testing.T) {
 	dbPath := filepath.Join(root, config.DBFile)
 
 	first := openWorkspaceDB(t, root)
-	second, err := database.Open(dbPath, indexer.Chunking())
+	second, err := database.Open(dbPath, database.OpenOptions{Chunking: indexer.Chunking()})
 	require.NoError(t, err)
 	t.Cleanup(func() { second.Close() })
 

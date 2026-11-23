@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,10 +9,20 @@ import (
 	"unicode/utf8"
 
 	"github.com/jmoiron/sqlx"
+	"github.com/synt4xer/proxer/database"
 	"github.com/synt4xer/proxer/internal/config"
 	"github.com/synt4xer/proxer/internal/domain"
 	"github.com/synt4xer/proxer/internal/indexer"
 )
+
+// reindexFileContent is overridden in tests to simulate post-write reindex failures.
+var reindexFileContent = indexer.ReindexFileContentWithOptions
+
+// EditOptions configures PerformEditWithOptions.
+type EditOptions struct {
+	IgnoredDirs    []string
+	IndexSensitive bool
+}
 
 // PerformEdit replaces a line range in a file and reindexes it. The path is
 // resolved against root, matching PerformRead, so a harness that spawns proxer
@@ -21,6 +32,15 @@ import (
 // project's skip list, so editing a file inside an ignored directory does not
 // add it back to the index.
 func PerformEdit(db *sqlx.DB, root, path string, startLine, endLine int, newContent, expectedHash string, ignoredDirs []string) (domain.EditResultJSON, error) {
+	return PerformEditWithOptions(context.Background(), db, root, path, startLine, endLine, newContent, expectedHash, EditOptions{
+		IgnoredDirs: ignoredDirs,
+	})
+}
+
+// PerformEditWithOptions replaces a line range in a file after verifying DB
+// writability, writes atomically, and reports any post-write reindex failure
+// non-fatally in EditResultJSON.
+func PerformEditWithOptions(ctx context.Context, db *sqlx.DB, root, path string, startLine, endLine int, newContent, expectedHash string, opts EditOptions) (domain.EditResultJSON, error) {
 	resolved, err := resolvePath(root, path)
 	if err != nil {
 		return domain.EditResultJSON{}, err
@@ -71,13 +91,31 @@ func PerformEdit(db *sqlx.DB, root, path string, startLine, endLine int, newCont
 
 	finalBytes := []byte(strings.Join(finalLines, "\n"))
 
+	if err := database.CheckWritable(ctx, db); err != nil {
+		if database.IsReadOnlyError(err) {
+			return domain.EditResultJSON{}, fmt.Errorf("refusing to edit '%s': index database is read-only or not writable (%w); set PROXER_DB=<writable-path> to use a writable database", path, err)
+		}
+		if database.IsBusyError(err) {
+			return domain.EditResultJSON{}, fmt.Errorf("refusing to edit '%s': index database is locked by another writer (%w); retry shortly", path, err)
+		}
+		return domain.EditResultJSON{}, fmt.Errorf("refusing to edit '%s': index database is not writable: %w", path, err)
+	}
+
 	if err := writeFileAtomically(resolved, finalBytes); err != nil {
 		return domain.EditResultJSON{}, fmt.Errorf("failed to save file: %w", err)
 	}
 
-	err = indexer.ReindexFileContent(db, root, resolved, finalBytes, ignoredDirs)
+	err = reindexFileContent(db, root, resolved, finalBytes, indexer.IndexOptions{
+		IgnoredDirs:    opts.IgnoredDirs,
+		IndexSensitive: opts.IndexSensitive,
+	})
 	if err != nil {
-		return domain.EditResultJSON{}, fmt.Errorf("file saved, but reindexing it failed: %w", err)
+		return domain.EditResultJSON{
+			Status:        "success",
+			Message:       fmt.Sprintf("Saved lines %d-%d in %s on disk, but reindexing failed; run proxer index or wait for the next search refresh to reconcile.", startLine, endLine, path),
+			ReindexFailed: true,
+			ReindexError:  err.Error(),
+		}, nil
 	}
 
 	return domain.EditResultJSON{

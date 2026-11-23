@@ -35,7 +35,7 @@ func newToolWorkspace(t *testing.T) (string, *sqlx.DB) {
 	root := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(root, "main.go"), []byte(mockCode), 0o644))
 
-	db, err := database.Open(filepath.Join(root, config.DBFile), indexer.Chunking())
+	db, err := database.Open(filepath.Join(root, config.DBFile), database.OpenOptions{Chunking: indexer.Chunking()})
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 
@@ -653,7 +653,7 @@ func TestPerformReadLongLines(t *testing.T) {
 func TestPerformSearchPriority2RankingAndSubtokens(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(t.TempDir(), "p2.db")
-	db, err := database.Open(dbPath, indexer.Chunking())
+	db, err := database.Open(dbPath, database.OpenOptions{Chunking: indexer.Chunking()})
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 

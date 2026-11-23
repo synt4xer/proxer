@@ -166,7 +166,7 @@ func TestNoChangeRefreshTakesNoWriteLock(t *testing.T) {
 	write(t, filepath.Join(root, "main.go"), "func Main() {}\n")
 	mustIndex(t, reader, root, ignored)
 
-	writer, err := database.Open(dbPath, indexer.Chunking())
+	writer, err := database.Open(dbPath, database.OpenOptions{Chunking: indexer.Chunking()})
 	require.NoError(t, err)
 	t.Cleanup(func() { writer.Close() })
 

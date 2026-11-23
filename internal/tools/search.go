@@ -8,6 +8,7 @@ import (
 	"github.com/jmoiron/sqlx"
 	"github.com/synt4xer/proxer/database"
 	"github.com/synt4xer/proxer/internal/domain"
+	"github.com/synt4xer/proxer/internal/filesystem"
 	"github.com/synt4xer/proxer/internal/indexer"
 )
 
@@ -118,11 +119,12 @@ func buildMatchQueries(keyword string) (andQuery, orQuery string, multiTerm bool
 // gets the default instead of an error. Kind filters and orders the results by
 // path class: the empty value keeps all of them, code first.
 type SearchOptions struct {
-	NoRefresh   bool
-	IgnoredDirs []string
-	Limit       int
-	Kind        string
-	MaxPerFile  int
+	NoRefresh      bool
+	IgnoredDirs    []string
+	IndexSensitive bool
+	Limit          int
+	Kind           string
+	MaxPerFile     int
 }
 
 // PerformSearch answers a keyword query from the index. Unless the caller opts
@@ -138,12 +140,16 @@ func PerformSearch(db *sqlx.DB, root, keyword string, opts SearchOptions) (domai
 	}
 
 	response := domain.SearchResponse{
-		Root:    root,
-		Results: make([]domain.SearchResultJSON, 0),
+		Root:           root,
+		IndexSensitive: opts.IndexSensitive,
+		Results:        make([]domain.SearchResultJSON, 0),
 	}
 
 	if !opts.NoRefresh {
-		refreshed, err := indexer.IndexProject(db, root, opts.IgnoredDirs)
+		refreshed, err := indexer.IndexProjectWithOptions(db, root, indexer.IndexOptions{
+			IgnoredDirs:    opts.IgnoredDirs,
+			IndexSensitive: opts.IndexSensitive,
+		})
 		if err != nil {
 			return domain.SearchResponse{}, fmt.Errorf("failed to refresh the index: %w", err)
 		}
@@ -161,6 +167,12 @@ func PerformSearch(db *sqlx.DB, root, keyword string, opts SearchOptions) (domai
 	}
 	response.IndexedAt = indexedAt
 
+	purgePending, err := database.PurgePending(db)
+	if err != nil {
+		return domain.SearchResponse{}, fmt.Errorf("failed to read purge state: %w", err)
+	}
+	response.PurgePending = purgePending
+
 	andQuery, orQuery, multiTerm, ok := buildMatchQueries(keyword)
 	if !ok {
 		return response, nil
@@ -170,11 +182,10 @@ func PerformSearch(db *sqlx.DB, root, keyword string, opts SearchOptions) (domai
 	maxPerFile := clampMaxPerFile(opts.MaxPerFile)
 	window := candidateWindow(limit)
 
-	candidates, total, err := fetchCandidates(db, andQuery, orQuery, multiTerm, kind, limit, maxPerFile, window)
+	candidates, total, filteredSensitive, err := fetchCandidates(db, andQuery, orQuery, multiTerm, kind, limit, maxPerFile, window, opts.IndexSensitive)
 	if err != nil {
 		return domain.SearchResponse{}, err
 	}
-	response.Total = total
 
 	eligible := candidates
 
@@ -190,9 +201,20 @@ func PerformSearch(db *sqlx.DB, root, keyword string, opts SearchOptions) (domai
 			if err != nil {
 				return domain.SearchResponse{}, err
 			}
+			hidden, _ = filterSensitiveCandidates(hidden, opts.IndexSensitive)
 			eligible = append(filterKind(dedupeByFile(hidden, maxPerFile), kindCode), eligible...)
 		}
 	}
+
+	if filteredSensitive > 0 {
+		adjusted := total - filteredSensitive
+		if adjusted < len(eligible) {
+			adjusted = len(eligible)
+		}
+		total = adjusted
+		response.FilteredSensitive = filteredSensitive
+	}
+	response.Total = total
 
 	// A window that was cut short may hide files, and a slice that was capped
 	// hides some it already found. Either way the caller is not seeing the
@@ -230,39 +252,46 @@ func applyKindQuery(matchQuery string, kind fileKind) string {
 // fetchCandidates runs AND-first for multi-term queries so co-occurring matches
 // rank first without single-token noise flooding, falling back to OR only when
 // AND returns fewer unique files than limit.
-func fetchCandidates(db *sqlx.DB, andQuery, orQuery string, multiTerm bool, kind fileKind, limit, maxPerFile, window int) ([]domain.SearchResultDB, int, error) {
+func fetchCandidates(db *sqlx.DB, andQuery, orQuery string, multiTerm bool, kind fileKind, limit, maxPerFile, window int, indexSensitive bool) ([]domain.SearchResultDB, int, int, error) {
 	if !multiTerm {
 		candidates, err := rankedCandidates(db, applyKindQuery(orQuery, kind), window)
 		if err != nil {
-			return nil, 0, err
+			return nil, 0, 0, err
 		}
 		total := 0
 		if len(candidates) > 0 {
 			total = candidates[0].Total
 		}
-		return orderByKind(dedupeByFile(candidates, maxPerFile), kind), total, nil
+		candidates, filtered := filterSensitiveCandidates(candidates, indexSensitive)
+		return orderByKind(dedupeByFile(candidates, maxPerFile), kind), total, filtered, nil
 	}
 
 	andCandidates, err := rankedCandidates(db, applyKindQuery(andQuery, kind), window)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
+	andTotal := 0
+	if len(andCandidates) > 0 {
+		andTotal = andCandidates[0].Total
+	}
+	andCandidates, andFiltered := filterSensitiveCandidates(andCandidates, indexSensitive)
 	andOrdered := orderByKind(dedupeByFile(andCandidates, maxPerFile), kind)
 	if len(andOrdered) >= limit {
-		return andOrdered, andCandidates[0].Total, nil
+		return andOrdered, andTotal, andFiltered, nil
 	}
 
 	orCandidates, err := rankedCandidates(db, applyKindQuery(orQuery, kind), window)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 	total := 0
 	if len(orCandidates) > 0 {
 		total = orCandidates[0].Total
 	}
+	orCandidates, orFiltered := filterSensitiveCandidates(orCandidates, indexSensitive)
 	orOrdered := orderByKind(dedupeByFile(orCandidates, maxPerFile), kind)
 	if len(andOrdered) == 0 {
-		return orOrdered, total, nil
+		return orOrdered, total, orFiltered, nil
 	}
 
 	kept := make(map[string][]domain.SearchResultDB, len(andOrdered))
@@ -278,7 +307,23 @@ func fetchCandidates(db *sqlx.DB, andQuery, orQuery string, multiTerm bool, kind
 		kept[r.Filepath] = append(kept[r.Filepath], r)
 		merged = append(merged, r)
 	}
-	return merged, total, nil
+	return merged, total, orFiltered, nil
+}
+
+func filterSensitiveCandidates(candidates []domain.SearchResultDB, indexSensitive bool) ([]domain.SearchResultDB, int) {
+	if indexSensitive || len(candidates) == 0 {
+		return candidates, 0
+	}
+	kept := make([]domain.SearchResultDB, 0, len(candidates))
+	filtered := 0
+	for _, c := range candidates {
+		if filesystem.IsSensitivePath(c.Filepath) {
+			filtered++
+			continue
+		}
+		kept = append(kept, c)
+	}
+	return kept, filtered
 }
 
 // rankedCandidates fetches the best-ranked chunks for matchQuery. The match is
