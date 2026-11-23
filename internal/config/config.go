@@ -292,7 +292,6 @@ var AllowedExactNames = map[string]FileKind{
 	"docker-compose.yaml": KindCode,
 	"package.json":        KindCode,
 	"go.mod":              KindCode,
-	"go.sum":              KindCode,
 	".env.example":        KindCode,
 	".env.sample":         KindCode,
 	".env.template":       KindCode,

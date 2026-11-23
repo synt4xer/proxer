@@ -112,7 +112,7 @@ func TestUnifiedRegistryExtensionsAndExactNames(t *testing.T) {
 		"Dockerfile", "Makefile", "Gemfile", "Rakefile", "Podfile",
 		"Jenkinsfile", "BUILD", "WORKSPACE",
 		"docker-compose.yml", "docker-compose.yaml",
-		"package.json", "go.mod", "go.sum",
+		"package.json", "go.mod",
 		".env.example", ".env.sample", ".env.template",
 	}
 	for _, name := range exact {
@@ -120,4 +120,8 @@ func TestUnifiedRegistryExtensionsAndExactNames(t *testing.T) {
 		assert.True(t, ok, "expected indexable exact filename: %s", name)
 		assert.Equal(t, filesystem.SkipNone, reason)
 	}
+
+	ok, reason := filesystem.IsIndexableFileName("go.sum", false)
+	assert.False(t, ok)
+	assert.Equal(t, filesystem.SkipExtension, reason)
 }
