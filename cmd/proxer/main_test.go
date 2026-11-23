@@ -2,7 +2,8 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
+	"encoding/json/jsontext"
+	json "encoding/json/v2"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -30,7 +31,7 @@ func runCLI(args []string, stdin string) (int, string, string) {
 	return code, stdout.String(), stderr.String()
 }
 
-func decodeSingleLineJSON(t *testing.T, code int, stdout, stderr string) map[string]any {
+func decodeSingleLineJSON(t *testing.T, code int, stdout, stderr string) map[string]jsontext.Value {
 	t.Helper()
 
 	require.Equal(t, 0, code, "expected exit 0, stderr: %q", stderr)
@@ -40,15 +41,20 @@ func decodeSingleLineJSON(t *testing.T, code int, stdout, stderr string) map[str
 	line := strings.TrimSuffix(stdout, "\n")
 	assert.NotContains(t, line, "\n", "stdout must be a single line of JSON")
 
-	dec := json.NewDecoder(strings.NewReader(line))
-	dec.UseNumber()
-
-	var obj map[string]any
-	require.NoError(t, dec.Decode(&obj))
+	var obj map[string]jsontext.Value
+	require.NoError(t, json.Unmarshal([]byte(line), &obj))
 	return obj
 }
 
-func assertJSONSchema(t *testing.T, obj map[string]any, want map[string]jsonType) {
+func unmarshalJSON[T any](t *testing.T, raw jsontext.Value) T {
+	t.Helper()
+
+	var out T
+	require.NoError(t, json.Unmarshal(raw, &out))
+	return out
+}
+
+func assertJSONSchema(t *testing.T, obj map[string]jsontext.Value, want map[string]jsonType) {
 	t.Helper()
 
 	assert.Len(t, obj, len(want), "unexpected JSON key set: got %v", obj)
@@ -59,27 +65,23 @@ func assertJSONSchema(t *testing.T, obj map[string]any, want map[string]jsonType
 	}
 }
 
-func assertJSONValueType(t *testing.T, key string, val any, wantType jsonType) {
+func assertJSONValueType(t *testing.T, key string, val jsontext.Value, wantType jsonType) {
 	t.Helper()
 
+	kind := val.Kind()
 	switch wantType {
 	case jsonString:
-		_, ok := val.(string)
-		assert.True(t, ok, "key %q: expected string, got %T (%v)", key, val, val)
+		assert.Equal(t, jsontext.Kind('"'), kind, "key %q: expected string, got %s", key, val)
 	case jsonInt:
-		num, ok := val.(json.Number)
-		require.True(t, ok, "key %q: expected JSON number, got %T (%v)", key, val, val)
-		_, err := strconv.ParseInt(num.String(), 10, 64)
-		assert.NoError(t, err, "key %q: expected integer JSON number, got %q", key, num.String())
+		require.Equal(t, jsontext.Kind('0'), kind, "key %q: expected JSON number, got %s", key, val)
+		_, err := strconv.ParseInt(string(val), 10, 64)
+		assert.NoError(t, err, "key %q: expected integer JSON number, got %s", key, val)
 	case jsonBool:
-		_, ok := val.(bool)
-		assert.True(t, ok, "key %q: expected bool, got %T (%v)", key, val, val)
+		assert.True(t, kind == 't' || kind == 'f', "key %q: expected bool, got %s", key, val)
 	case jsonArray:
-		_, ok := val.([]any)
-		assert.True(t, ok, "key %q: expected array, got %T (%v)", key, val, val)
+		assert.Equal(t, jsontext.Kind('['), kind, "key %q: expected array, got %s", key, val)
 	case jsonObject:
-		_, ok := val.(map[string]any)
-		assert.True(t, ok, "key %q: expected object, got %T (%v)", key, val, val)
+		assert.Equal(t, jsontext.Kind('{'), kind, "key %q: expected object, got %s", key, val)
 	default:
 		t.Fatalf("unknown jsonType %q", wantType)
 	}
@@ -124,15 +126,15 @@ func TestCLIGoldenEnvelopes(t *testing.T) {
 		"status":    jsonString,
 		"refreshed": jsonObject,
 	})
-	assert.Equal(t, "indexed_successfully", indexObj["status"])
-	refreshedObj := indexObj["refreshed"].(map[string]any)
+	assert.Equal(t, "indexed_successfully", unmarshalJSON[string](t, indexObj["status"]))
+	refreshedObj := unmarshalJSON[map[string]jsontext.Value](t, indexObj["refreshed"])
 	assertJSONSchema(t, refreshedObj, map[string]jsonType{
 		"added":   jsonInt,
 		"changed": jsonInt,
 		"removed": jsonInt,
 		"skipped": jsonInt,
 	})
-	assert.Equal(t, json.Number("2"), refreshedObj["added"])
+	assert.Equal(t, 2, unmarshalJSON[int](t, refreshedObj["added"]))
 
 	// 2. search (with refresh)
 	code, stdout, stderr = runCLI([]string{"--root", root, "search", "-k", "ComputeAnswer"}, "")
@@ -147,16 +149,15 @@ func TestCLIGoldenEnvelopes(t *testing.T) {
 		"truncated":  jsonBool,
 		"results":    jsonArray,
 	})
-	assertJSONSchema(t, searchObj["refreshed"].(map[string]any), map[string]jsonType{
+	assertJSONSchema(t, unmarshalJSON[map[string]jsontext.Value](t, searchObj["refreshed"]), map[string]jsonType{
 		"added":   jsonInt,
 		"changed": jsonInt,
 		"removed": jsonInt,
 		"skipped": jsonInt,
 	})
-	results := searchObj["results"].([]any)
+	results := unmarshalJSON[[]map[string]jsontext.Value](t, searchObj["results"])
 	require.NotEmpty(t, results)
-	firstResult, ok := results[0].(map[string]any)
-	require.True(t, ok)
+	firstResult := results[0]
 	assertJSONSchema(t, firstResult, map[string]jsonType{
 		"root":     jsonString,
 		"filepath": jsonString,
@@ -164,7 +165,7 @@ func TestCLIGoldenEnvelopes(t *testing.T) {
 		"snippet":  jsonString,
 		"match":    jsonString,
 	})
-	assert.Equal(t, "main.go", firstResult["filepath"])
+	assert.Equal(t, "main.go", unmarshalJSON[string](t, firstResult["filepath"]))
 
 	// 3. read
 	code, stdout, stderr = runCLI([]string{"--root", root, "read", "-f", "main.go", "-s", "1", "-e", "5"}, "")
@@ -175,9 +176,9 @@ func TestCLIGoldenEnvelopes(t *testing.T) {
 		"content":  jsonString,
 		"hash":     jsonString,
 	})
-	assert.Equal(t, "main.go", readObj["filepath"])
-	assert.Contains(t, readObj["content"].(string), "return 42")
-	hash := readObj["hash"].(string)
+	assert.Equal(t, "main.go", unmarshalJSON[string](t, readObj["filepath"]))
+	assert.Contains(t, unmarshalJSON[string](t, readObj["content"]), "return 42")
+	hash := unmarshalJSON[string](t, readObj["hash"])
 	require.NotEmpty(t, hash)
 
 	// 4. edit (with --hash and stdin replacement)
@@ -190,12 +191,12 @@ func TestCLIGoldenEnvelopes(t *testing.T) {
 		"status":  jsonString,
 		"message": jsonString,
 	})
-	assert.Equal(t, "success", editObj["status"])
+	assert.Equal(t, "success", unmarshalJSON[string](t, editObj["status"]))
 
 	// Verify edit reindexed the file immediately
 	code, stdout, stderr = runCLI([]string{"--root", root, "search", "-k", "99", "--no-refresh"}, "")
 	afterEditObj := decodeSingleLineJSON(t, code, stdout, stderr)
-	assert.Equal(t, json.Number("1"), afterEditObj["total"])
+	assert.Equal(t, 1, unmarshalJSON[int](t, afterEditObj["total"]))
 }
 
 func TestCLISearchFlagsAndNoRefresh(t *testing.T) {
@@ -223,7 +224,7 @@ func TestCLISearchFlagsAndNoRefresh(t *testing.T) {
 	})
 	_, hasRefreshed := noRefreshObj["refreshed"]
 	assert.False(t, hasRefreshed)
-	assert.Equal(t, json.Number("0"), noRefreshObj["total"])
+	assert.Equal(t, 0, unmarshalJSON[int](t, noRefreshObj["total"]))
 
 	// PROXER_NO_REFRESH=1 has the same effect without the flag.
 	t.Setenv(config.NoRefreshEnvVar, "1")
@@ -231,14 +232,14 @@ func TestCLISearchFlagsAndNoRefresh(t *testing.T) {
 	envObj := decodeSingleLineJSON(t, code, stdout, stderr)
 	_, hasRefreshed = envObj["refreshed"]
 	assert.False(t, hasRefreshed)
-	assert.Equal(t, json.Number("0"), envObj["total"])
+	assert.Equal(t, 0, unmarshalJSON[int](t, envObj["total"]))
 
 	// --kind and -n flags filter and bound results.
 	code, stdout, stderr = runCLI([]string{"--root", root, "search", "-k", "ComputeAnswer", "--kind", "docs", "-n", "1"}, "")
 	docsObj := decodeSingleLineJSON(t, code, stdout, stderr)
-	results := docsObj["results"].([]any)
+	results := unmarshalJSON[[]map[string]jsontext.Value](t, docsObj["results"])
 	require.Len(t, results, 1)
-	assert.Equal(t, "README.md", results[0].(map[string]any)["filepath"])
+	assert.Equal(t, "README.md", unmarshalJSON[string](t, results[0]["filepath"]))
 }
 
 func TestCLIErrorPaths(t *testing.T) {

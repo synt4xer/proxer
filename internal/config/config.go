@@ -2,7 +2,7 @@ package config
 
 import (
 	"bytes"
-	"encoding/json"
+	json "encoding/json/v2"
 	"errors"
 	"fmt"
 	"os"
@@ -133,9 +133,7 @@ func LoadIgnoredDirs(root string) ([]string, error) {
 	}
 
 	var cfg ProjectConfig
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&cfg); err != nil {
+	if err := json.Unmarshal(data, &cfg, json.RejectUnknownMembers(true)); err != nil {
 		return nil, fmt.Errorf("invalid %s: %w", ConfigFile, err)
 	}
 
