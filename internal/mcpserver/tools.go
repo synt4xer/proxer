@@ -12,11 +12,6 @@ import (
 
 type indexInput struct{}
 
-type indexOutput struct {
-	Status    string                `json:"status" jsonschema:"human-readable result of the index run"`
-	Refreshed domain.RefreshSummary `json:"refreshed" jsonschema:"files added, changed, removed, and skipped by this run; all zero when the index was already current"`
-}
-
 type searchInput struct {
 	Keyword    string `json:"keyword" jsonschema:"terms to search for; each term matches as a token prefix (and camelCase sub-tokens on code/config), using AND-first with OR fallback"`
 	Limit      int    `json:"limit,omitempty" jsonschema:"maximum number of results to return, clamped to 1..50 (default 5)"`
@@ -52,12 +47,12 @@ func (s *Server) addIndexTool() {
 			"It is incremental: only new, changed, and deleted files are touched, so running it is cheap. " +
 			"search does this automatically, so the tool exists for callers that want to pay the cost up front. " +
 			"No parameters are needed: the root is fixed when the server starts.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, _ indexInput) (*mcp.CallToolResult, indexOutput, error) {
+	}, func(_ context.Context, _ *mcp.CallToolRequest, _ indexInput) (*mcp.CallToolResult, domain.IndexResponse, error) {
 		refreshed, err := indexer.IndexProject(s.db, s.root, s.ignoredDirs)
 		if err != nil {
-			return nil, indexOutput{}, err
+			return nil, domain.IndexResponse{}, err
 		}
-		return nil, indexOutput{
+		return nil, domain.IndexResponse{
 			Status: "indexed_successfully",
 			Refreshed: domain.RefreshSummary{
 				Added:   refreshed.Added,

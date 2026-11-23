@@ -15,7 +15,7 @@ import (
 	"github.com/synt4xer/proxer/internal/mcpserver"
 )
 
-func newMCPCommand() *cobra.Command {
+func newMCPCommand(state *cliState) *cobra.Command {
 	return &cobra.Command{
 		Use:   "mcp",
 		Short: "Serve index, search, read, and edit over the MCP stdio transport",
@@ -24,7 +24,7 @@ func newMCPCommand() *cobra.Command {
 			manageDBAnnotation: "true",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			serverDB, err := database.Open(filepath.Join(root, config.DBFile), indexer.Chunking())
+			serverDB, err := database.Open(filepath.Join(state.root, config.DBFile), indexer.Chunking())
 			if err != nil {
 				return fmt.Errorf("failed to initialize DB: %w", err)
 			}
@@ -33,7 +33,7 @@ func newMCPCommand() *cobra.Command {
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 
-			return mcpserver.New(serverDB, root, ignoredDirs).Run(ctx, &mcp.StdioTransport{})
+			return mcpserver.New(serverDB, state.root, state.ignoredDirs).Run(ctx, &mcp.StdioTransport{})
 		},
 	}
 }
