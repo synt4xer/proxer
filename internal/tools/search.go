@@ -150,12 +150,8 @@ func PerformSearch(db *sqlx.DB, root, keyword string, opts SearchOptions) (domai
 		if err != nil {
 			return domain.SearchResponse{}, fmt.Errorf("failed to refresh the index: %w", err)
 		}
-		response.Refreshed = &domain.RefreshSummary{
-			Added:   refreshed.Added,
-			Changed: refreshed.Changed,
-			Removed: refreshed.Removed,
-			Skipped: refreshed.Skipped,
-		}
+		summary := refreshed.ToSummary()
+		response.Refreshed = &summary
 	}
 
 	indexedAt, err := database.IndexedAt(db)

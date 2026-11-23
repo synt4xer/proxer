@@ -40,7 +40,7 @@ func IndexProjectWithOptions(db *sqlx.DB, rootPath string, opts IndexOptions) (R
 	}
 
 	if diff.Empty() {
-		return Refreshed{}, nil
+		return diff.refreshedBase(), nil
 	}
 
 	return applyDiff(db, rootPath, diff, opts)
@@ -81,7 +81,7 @@ func reindexFileWithContent(db *sqlx.DB, rootPath, path string, content []byte, 
 		return err
 	}
 
-	if err := reindexFile(tx, writer, rel, path, content, hasContent, opts); err != nil {
+	if err := reindexFile(tx, writer, rootPath, rel, path, content, hasContent, opts); err != nil {
 		writer.Close()
 		return err
 	}
@@ -98,10 +98,11 @@ func reindexFileWithContent(db *sqlx.DB, rootPath, path string, content []byte, 
 
 // reindexFile is the body of ReindexFile, split out so every early return still
 // goes through the single commit above.
-func reindexFile(tx *sqlx.Tx, writer *database.Writer, rel, path string, content []byte, hasContent bool, opts IndexOptions) error {
-	if filesystem.PathHasIgnoredDir(rel, opts.IgnoredDirs) {
-		// The file lives under a directory the project ignores, so editing it
-		// directly must not smuggle it back into the index.
+func reindexFile(tx *sqlx.Tx, writer *database.Writer, rootPath, rel, path string, content []byte, hasContent bool, opts IndexOptions) error {
+	matcher := filesystem.NewIgnoreMatcher(rootPath, opts.IgnoredDirs)
+	if matcher.IsPathIgnored(rel, false) {
+		// The file is ignored by ignored_dirs or .gitignore/.git/info/exclude,
+		// so editing it directly must not smuggle it back into the index.
 		return database.Remove(tx, rel)
 	}
 

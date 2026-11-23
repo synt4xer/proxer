@@ -10,14 +10,28 @@ type SearchResultDB struct {
 	Total     int     `db:"total"`
 }
 
+// SkippedCounts breaks down RefreshSummary.Skipped by mutually exclusive file
+// skip reason (all counts are in files, never directories).
+type SkippedCounts struct {
+	IgnoredFiles int `json:"ignored_files,omitempty,omitzero"`
+	Extension    int `json:"extension,omitempty,omitzero"`
+	Sensitive    int `json:"sensitive,omitempty,omitzero"`
+	Minified     int `json:"minified,omitempty,omitzero"`
+	Size         int `json:"size,omitempty,omitzero"`
+}
+
 // RefreshSummary reports what the pre-search refresh changed. It is omitted when
 // the caller asked for no refresh, because "zero changes" and "not checked" are
 // different answers and only one of them is a claim about the index.
+// Skipped is strictly in files; IgnoredDirs counts pruned directory roots
+// separately and is never added to Skipped.
 type RefreshSummary struct {
-	Added   int `json:"added"`
-	Changed int `json:"changed"`
-	Removed int `json:"removed"`
-	Skipped int `json:"skipped"`
+	Added           int            `json:"added"`
+	Changed         int            `json:"changed"`
+	Removed         int            `json:"removed"`
+	Skipped         int            `json:"skipped"`
+	IgnoredDirs     int            `json:"ignored_dirs,omitempty,omitzero"`
+	SkippedByReason *SkippedCounts `json:"skipped_by_reason,omitempty"`
 }
 
 type IndexResponse struct {

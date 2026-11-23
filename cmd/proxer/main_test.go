@@ -367,3 +367,38 @@ func TestCLISensitiveExclusionAndOptInToggle(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, string(dbBytes), "topsecret123")
 }
+
+func TestCLISkipBreakdownAndIgnoredDirsGolden(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".venv"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".venv", "site.py"), []byte("x = 1\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".gitignore"), []byte("ignored.go\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "ignored.go"), []byte("package main\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".env"), []byte("TOKEN=abc\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\nfunc SkipCheck() {}\n"), 0o644))
+
+	code, stdout, stderr := runCLI([]string{"--root", root, "index"}, "")
+	idxObj := decodeSingleLineJSON(t, code, stdout, stderr)
+	refreshed := unmarshalJSON[map[string]jsontext.Value](t, idxObj["refreshed"])
+	assertJSONSchema(t, refreshed, map[string]jsonType{
+		"added":             jsonInt,
+		"changed":           jsonInt,
+		"removed":           jsonInt,
+		"skipped":           jsonInt,
+		"ignored_dirs":      jsonInt,
+		"skipped_by_reason": jsonObject,
+	})
+	assert.Equal(t, 1, unmarshalJSON[int](t, refreshed["added"]))
+	assert.Equal(t, 1, unmarshalJSON[int](t, refreshed["ignored_dirs"]))
+	assert.Equal(t, 3, unmarshalJSON[int](t, refreshed["skipped"]))
+
+	reasons := unmarshalJSON[map[string]jsontext.Value](t, refreshed["skipped_by_reason"])
+	assertJSONSchema(t, reasons, map[string]jsonType{
+		"ignored_files": jsonInt,
+		"extension":     jsonInt,
+		"sensitive":     jsonInt,
+	})
+	assert.Equal(t, 1, unmarshalJSON[int](t, reasons["ignored_files"]))
+	assert.Equal(t, 1, unmarshalJSON[int](t, reasons["extension"]))
+	assert.Equal(t, 1, unmarshalJSON[int](t, reasons["sensitive"]))
+}

@@ -64,13 +64,8 @@ func (s *Server) addIndexTool() {
 			}
 		}
 		return nil, domain.IndexResponse{
-			Status: "indexed_successfully",
-			Refreshed: domain.RefreshSummary{
-				Added:   refreshed.Added,
-				Changed: refreshed.Changed,
-				Removed: refreshed.Removed,
-				Skipped: refreshed.Skipped,
-			},
+			Status:         "indexed_successfully",
+			Refreshed:      refreshed.ToSummary(),
 			IndexSensitive: s.indexSensitive,
 			PurgePending:   scrub.PurgePending,
 			Warning:        scrub.Warning,
