@@ -19,9 +19,10 @@ import (
 const manageDBAnnotation = "ownDB"
 
 type cliState struct {
-	root        string
-	ignoredDirs []string
-	db          *sqlx.DB
+	root   string
+	dbPath string
+	cfg    config.ProjectConfig
+	db     *sqlx.DB
 }
 
 func main() {
@@ -65,16 +66,20 @@ func newRootCommand(state *cliState) *cobra.Command {
 				return fmt.Errorf("failed to resolve the project root: %w", err)
 			}
 
-			state.ignoredDirs, err = config.LoadIgnoredDirs(state.root)
+			state.cfg, err = config.LoadProjectConfig(state.root)
 			if err != nil {
 				return fmt.Errorf("failed to load the project config: %w", err)
 			}
 
+			state.dbPath = filepath.Join(state.root, config.DBFile)
 			if cmd.Annotations[manageDBAnnotation] == "true" {
 				return nil
 			}
 
-			state.db, err = database.Open(filepath.Join(state.root, config.DBFile), indexer.Chunking())
+			state.db, err = database.Open(state.dbPath, database.OpenOptions{
+				Chunking:       indexer.Chunking(),
+				IndexSensitive: state.cfg.IndexSensitive,
+			})
 			if err != nil {
 				return fmt.Errorf("failed to initialize DB: %w", err)
 			}
@@ -87,9 +92,16 @@ func newRootCommand(state *cliState) *cobra.Command {
 		Use:   "index",
 		Short: "Scan and index the local directory",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			refreshed, err := indexer.IndexProject(state.db, state.root, state.ignoredDirs)
+			refreshed, err := indexer.IndexProjectWithOptions(state.db, state.root, indexer.IndexOptions{
+				IgnoredDirs:    state.cfg.IgnoredDirs,
+				IndexSensitive: state.cfg.IndexSensitive,
+			})
 			if err != nil {
 				return fmt.Errorf("indexing failed: %w", err)
+			}
+			scrub, err := database.ScrubPurgedData(state.db, state.dbPath)
+			if err != nil {
+				return fmt.Errorf("indexing succeeded, but disk scrub failed: %w", err)
 			}
 			return writeJSON(cmd.OutOrStdout(), domain.IndexResponse{
 				Status: "indexed_successfully",
@@ -99,6 +111,9 @@ func newRootCommand(state *cliState) *cobra.Command {
 					Removed: refreshed.Removed,
 					Skipped: refreshed.Skipped,
 				},
+				IndexSensitive: state.cfg.IndexSensitive,
+				PurgePending:   scrub.PurgePending,
+				Warning:        scrub.Warning,
 			})
 		},
 	}
@@ -116,10 +131,11 @@ func newRootCommand(state *cliState) *cobra.Command {
 			}
 
 			result, err := tools.PerformSearch(state.db, state.root, keyword, tools.SearchOptions{
-				NoRefresh:   noRefresh || config.RefreshDisabled(),
-				IgnoredDirs: state.ignoredDirs,
-				Limit:       limit,
-				Kind:        kind,
+				NoRefresh:      noRefresh || config.RefreshDisabled(),
+				IgnoredDirs:    state.cfg.IgnoredDirs,
+				IndexSensitive: state.cfg.IndexSensitive,
+				Limit:          limit,
+				Kind:           kind,
 			})
 			if err != nil {
 				return err
@@ -138,6 +154,9 @@ func newRootCommand(state *cliState) *cobra.Command {
 	readCmd := &cobra.Command{
 		Use:   "read",
 		Short: "Read specific lines from a file",
+		Annotations: map[string]string{
+			manageDBAnnotation: "true",
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if filepathFlag == "" {
 				return errors.New("filepath cannot be empty")
@@ -170,7 +189,10 @@ func newRootCommand(state *cliState) *cobra.Command {
 				return fmt.Errorf("failed to read new content from stdin: %w", err)
 			}
 
-			result, err := tools.PerformEdit(state.db, state.root, editFilepath, editStart, editEnd, string(newContentBytes), editHash, state.ignoredDirs)
+			result, err := tools.PerformEditWithOptions(cmd.Context(), state.db, state.root, editFilepath, editStart, editEnd, string(newContentBytes), editHash, tools.EditOptions{
+				IgnoredDirs:    state.cfg.IgnoredDirs,
+				IndexSensitive: state.cfg.IndexSensitive,
+			})
 			if err != nil {
 				return err
 			}

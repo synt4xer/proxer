@@ -35,7 +35,7 @@ func newTestSessionWithIgnores(t *testing.T, ignoredDirs []string) (*mcp.ClientS
 	root := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(root, "main.go"), []byte(mockCode), 0o644))
 
-	db, err := database.Open(filepath.Join(root, config.DBFile), indexer.Chunking())
+	db, err := database.Open(filepath.Join(root, config.DBFile), database.OpenOptions{Chunking: indexer.Chunking()})
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 
@@ -186,7 +186,7 @@ func TestServerCoalescesRapidSearchRefreshes(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(root, "main.go"), []byte(mockCode), 0o644))
 
-	db, err := database.Open(filepath.Join(root, config.DBFile), indexer.Chunking())
+	db, err := database.Open(filepath.Join(root, config.DBFile), database.OpenOptions{Chunking: indexer.Chunking()})
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 

@@ -171,12 +171,20 @@ func TestCLIGoldenEnvelopes(t *testing.T) {
 	code, stdout, stderr = runCLI([]string{"--root", root, "read", "-f", "main.go", "-s", "1", "-e", "5"}, "")
 	readObj := decodeSingleLineJSON(t, code, stdout, stderr)
 	assertJSONSchema(t, readObj, map[string]jsonType{
-		"root":     jsonString,
-		"filepath": jsonString,
-		"content":  jsonString,
-		"hash":     jsonString,
+		"root":        jsonString,
+		"filepath":    jsonString,
+		"start_line":  jsonInt,
+		"end_line":    jsonInt,
+		"total_lines": jsonInt,
+		"truncated":   jsonBool,
+		"content":     jsonString,
+		"hash":        jsonString,
 	})
 	assert.Equal(t, "main.go", unmarshalJSON[string](t, readObj["filepath"]))
+	assert.Equal(t, 1, unmarshalJSON[int](t, readObj["start_line"]))
+	assert.Equal(t, 5, unmarshalJSON[int](t, readObj["end_line"]))
+	assert.Equal(t, 5, unmarshalJSON[int](t, readObj["total_lines"]))
+	assert.False(t, unmarshalJSON[bool](t, readObj["truncated"]))
 	assert.Contains(t, unmarshalJSON[string](t, readObj["content"]), "return 42")
 	hash := unmarshalJSON[string](t, readObj["hash"])
 	require.NotEmpty(t, hash)
@@ -309,4 +317,67 @@ func TestCLIErrorPaths(t *testing.T) {
 		)
 		assertCLIError(t, code, stdout, stderr, "changed since it was read")
 	})
+}
+
+func TestCLIReadOnReadOnlyRootWithoutDB(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "hello.go"), []byte("package main\nfunc Hello() {}\n"), 0o644))
+	require.NoError(t, os.Chmod(root, 0o555))
+	defer os.Chmod(root, 0o755)
+
+	code, stdout, stderr := runCLI([]string{"--root", root, "read", "-f", "hello.go", "-s", "1", "-e", "2"}, "")
+	readObj := decodeSingleLineJSON(t, code, stdout, stderr)
+	assert.Equal(t, "hello.go", unmarshalJSON[string](t, readObj["filepath"]))
+	assert.Equal(t, 2, unmarshalJSON[int](t, readObj["total_lines"]))
+
+	_, err := os.Stat(filepath.Join(root, config.DBFile))
+	assert.True(t, os.IsNotExist(err), "proxer read must not create .proxer.db")
+}
+
+func TestCLISensitiveExclusionAndOptInToggle(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "config"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".env"), []byte("SECRET_KEY=topsecret123\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "config", "prod.env"), []byte("SECRET_KEY=prodsecret456\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".env.example"), []byte("EXAMPLE_KEY=changeme\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".envoy.yaml"), []byte("envoy_cluster: ok\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "secrets.go"), []byte("package main\nfunc LoadSecrets() {}\n"), 0o644))
+
+	// Default (index_sensitive: false): sensitive files excluded, boundary & template files indexed.
+	code, stdout, stderr := runCLI([]string{"--root", root, "index"}, "")
+	idxObj := decodeSingleLineJSON(t, code, stdout, stderr)
+	refreshed := unmarshalJSON[map[string]jsontext.Value](t, idxObj["refreshed"])
+	assert.Equal(t, 3, unmarshalJSON[int](t, refreshed["added"]))
+
+	code, stdout, stderr = runCLI([]string{"--root", root, "search", "-k", "topsecret123", "--no-refresh"}, "")
+	searchObj := decodeSingleLineJSON(t, code, stdout, stderr)
+	assert.Equal(t, 0, unmarshalJSON[int](t, searchObj["total"]))
+
+	// Opt-in via .proxer.json: index_sensitive: true surfaces in index & search payloads.
+	require.NoError(t, os.WriteFile(filepath.Join(root, config.ConfigFile), []byte(`{"index_sensitive": true}`), 0o644))
+	code, stdout, stderr = runCLI([]string{"--root", root, "index"}, "")
+	optInIdx := decodeSingleLineJSON(t, code, stdout, stderr)
+	assert.True(t, unmarshalJSON[bool](t, optInIdx["index_sensitive"]))
+
+	code, stdout, stderr = runCLI([]string{"--root", root, "search", "-k", "topsecret123", "--no-refresh"}, "")
+	optInSearch := decodeSingleLineJSON(t, code, stdout, stderr)
+	assert.True(t, unmarshalJSON[bool](t, optInSearch["index_sensitive"]))
+	assert.Equal(t, 1, unmarshalJSON[int](t, optInSearch["total"]))
+
+	// Toggle back to index_sensitive: false -> Stage 1 purges on Open, search shows purge_pending=true,
+	// then explicit index runs Stage 2 and clears purge_pending + scrubs secret bytes.
+	require.NoError(t, os.WriteFile(filepath.Join(root, config.ConfigFile), []byte(`{"index_sensitive": false}`), 0o644))
+	code, stdout, stderr = runCLI([]string{"--root", root, "search", "-k", "topsecret123", "--no-refresh"}, "")
+	afterToggleSearch := decodeSingleLineJSON(t, code, stdout, stderr)
+	assert.Equal(t, 0, unmarshalJSON[int](t, afterToggleSearch["total"]))
+	assert.True(t, unmarshalJSON[bool](t, afterToggleSearch["purge_pending"]))
+
+	code, stdout, stderr = runCLI([]string{"--root", root, "index"}, "")
+	scrubIdx := decodeSingleLineJSON(t, code, stdout, stderr)
+	_, hasPending := scrubIdx["purge_pending"]
+	assert.False(t, hasPending, "Stage 2 index should clear purge_pending")
+
+	dbBytes, err := os.ReadFile(filepath.Join(root, config.DBFile))
+	require.NoError(t, err)
+	assert.NotContains(t, string(dbBytes), "topsecret123")
 }

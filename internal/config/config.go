@@ -16,6 +16,7 @@ const (
 	DBFile           = ".proxer.db"
 	MaxFileSize      = 1024 * 1024 // 1 MB
 	MaxLineWidth     = 4096        // 4 KB
+	MaxReadBytes     = 64 * 1024   // 64 KB
 	TruncationMarker = " [truncated]"
 	ChunkSize        = 60
 	OverlapSize      = 15
@@ -111,42 +112,56 @@ const ConfigFile = ".proxer.json"
 
 // ProjectConfig is the on-disk shape of ConfigFile.
 type ProjectConfig struct {
-	IgnoredDirs []string `json:"ignored_dirs"`
+	IgnoredDirs    []string `json:"ignored_dirs"`
+	IndexSensitive bool     `json:"index_sensitive"`
 }
 
-// LoadIgnoredDirs returns DefaultIgnoredDirs extended with the directories the
-// project lists in ConfigFile. A missing or empty file yields the defaults, so
-// an unconfigured project behaves exactly as before. A malformed file is an
-// error: falling back silently would index directories the project excluded.
-func LoadIgnoredDirs(root string) ([]string, error) {
-	ignored := slices.Clone(DefaultIgnoredDirs)
+// LoadProjectConfig reads ConfigFile from root and merges its ignored_dirs into
+// DefaultIgnoredDirs. A missing or empty file yields the defaults. A malformed
+// file is an error: falling back silently would index directories or sensitive
+// files the project configured explicitly.
+func LoadProjectConfig(root string) (ProjectConfig, error) {
+	result := ProjectConfig{
+		IgnoredDirs: slices.Clone(DefaultIgnoredDirs),
+	}
 
 	data, err := os.ReadFile(filepath.Join(root, ConfigFile))
 	if errors.Is(err, os.ErrNotExist) {
-		return ignored, nil
+		return result, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to read %s: %w", ConfigFile, err)
+		return ProjectConfig{}, fmt.Errorf("failed to read %s: %w", ConfigFile, err)
 	}
 	if len(bytes.TrimSpace(data)) == 0 {
-		return ignored, nil
+		return result, nil
 	}
 
 	var cfg ProjectConfig
 	if err := json.Unmarshal(data, &cfg, json.RejectUnknownMembers(true)); err != nil {
-		return nil, fmt.Errorf("invalid %s: %w", ConfigFile, err)
+		return ProjectConfig{}, fmt.Errorf("invalid %s: %w", ConfigFile, err)
 	}
 
 	for _, dir := range cfg.IgnoredDirs {
 		if err := validateIgnoredDir(dir); err != nil {
-			return nil, fmt.Errorf("invalid %s: %w", ConfigFile, err)
+			return ProjectConfig{}, fmt.Errorf("invalid %s: %w", ConfigFile, err)
 		}
-		if !slices.Contains(ignored, dir) {
-			ignored = append(ignored, dir)
+		if !slices.Contains(result.IgnoredDirs, dir) {
+			result.IgnoredDirs = append(result.IgnoredDirs, dir)
 		}
 	}
+	result.IndexSensitive = cfg.IndexSensitive
 
-	return ignored, nil
+	return result, nil
+}
+
+// LoadIgnoredDirs returns DefaultIgnoredDirs extended with the directories the
+// project lists in ConfigFile.
+func LoadIgnoredDirs(root string) ([]string, error) {
+	cfg, err := LoadProjectConfig(root)
+	if err != nil {
+		return nil, err
+	}
+	return cfg.IgnoredDirs, nil
 }
 
 // validateIgnoredDir rejects entries that can never match. Directories are
@@ -166,7 +181,7 @@ var AllowedExtensions = []string{
 	".go", ".rb", ".py", ".php", ".rs", ".java", ".c", ".cpp", ".cs",
 	".js", ".jsx", ".ts", ".tsx", ".vue", ".svelte", ".astro",
 	".html", ".css", ".scss", ".sass", ".less",
-	".md", ".json", ".yaml", ".yml", ".toml", ".ini", ".env",
+	".md", ".json", ".yaml", ".yml", ".toml", ".ini",
 	".sql", ".sh", ".bash",
 }
 

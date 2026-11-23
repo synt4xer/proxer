@@ -30,20 +30,32 @@ type Chunking struct {
 	Overlap int
 }
 
+// OpenOptions configures database.Open.
+type OpenOptions struct {
+	Chunking       Chunking
+	IndexSensitive bool
+}
+
 // Open opens the index database at dbPath and brings the schema in line with
 // this binary. The path is a parameter because the index belongs to a project
 // root, not to whatever directory the process happens to run in. A database
 // written by an older schema or another chunk window is emptied here, so
 // nothing that follows has to handle a layout it does not understand.
-func Open(dbPath string, chunking Chunking) (*sqlx.DB, error) {
+func Open(dbPath string, opts OpenOptions) (*sqlx.DB, error) {
 	if dir := filepath.Dir(dbPath); dir != "" {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			if IsReadOnlyError(err) {
+				return nil, fmt.Errorf("failed to create the index directory %q (%w); set PROXER_DB=<writable-path> to use a writable database location", dir, err)
+			}
 			return nil, fmt.Errorf("failed to create the index directory: %w", err)
 		}
 	}
 
 	db, err := sqlx.Connect("sqlite", dsn(dbPath))
 	if err != nil {
+		if IsReadOnlyError(err) || isUnreadableExistingDB(dbPath) {
+			return nil, fmt.Errorf("failed to open index database %q (%w); set PROXER_DB=<writable-path> to use a writable database location", dbPath, err)
+		}
 		return nil, err
 	}
 
@@ -52,12 +64,40 @@ func Open(dbPath string, chunking Chunking) (*sqlx.DB, error) {
 	// for every statement.
 	db.SetMaxOpenConns(1)
 
-	if err := migrate(db, chunking); err != nil {
+	if err := migrate(db, opts.Chunking); err != nil {
+		db.Close()
+		if IsReadOnlyError(err) {
+			return nil, fmt.Errorf("index database %q is not writable (%w); set PROXER_DB=<writable-path> to use a writable database location", dbPath, err)
+		}
+		return nil, err
+	}
+
+	if err := purgeSensitiveIfNeeded(db, opts.IndexSensitive); err != nil {
+		db.Close()
+		if IsReadOnlyError(err) {
+			return nil, fmt.Errorf("index database %q is not writable (%w); set PROXER_DB=<writable-path> to use a writable database location", dbPath, err)
+		}
+		return nil, err
+	}
+
+	if err := ChmodDBFiles(dbPath); err != nil {
 		db.Close()
 		return nil, err
 	}
 
 	return db, nil
+}
+
+func isUnreadableExistingDB(dbPath string) bool {
+	if _, err := os.Stat(dbPath); err != nil {
+		return false
+	}
+	f, err := os.OpenFile(dbPath, os.O_RDWR, 0)
+	if err != nil {
+		return os.IsPermission(err) || IsReadOnlyError(err)
+	}
+	f.Close()
+	return false
 }
 
 // dsn builds the SQLite URI for dbPath. Two settings cannot be expressed by a

@@ -106,10 +106,14 @@ func TestSearchResponseJSONContractAndOmitEmpty(t *testing.T) {
 
 func TestReadResultJSONContract(t *testing.T) {
 	in := domain.ReadResultJSON{
-		Root:     "/repo",
-		Filepath: "main.go",
-		Content:  "if a < b && b > c {\n}",
-		Hash:     "deadbeef",
+		Root:       "/repo",
+		Filepath:   "main.go",
+		StartLine:  1,
+		EndLine:    2,
+		TotalLines: 2,
+		Truncated:  false,
+		Content:    "if a < b && b > c {\n}",
+		Hash:       "deadbeef",
 	}
 
 	raw, err := tools.EncodeJSON(in)
@@ -120,7 +124,9 @@ func TestReadResultJSONContract(t *testing.T) {
 
 	var obj map[string]any
 	require.NoError(t, json.Unmarshal([]byte(raw), &obj))
-	assert.Equal(t, []string{"content", "filepath", "hash", "root"}, sortedKeys(obj))
+	assert.Equal(t, []string{"content", "end_line", "filepath", "hash", "root", "start_line", "total_lines", "truncated"}, sortedKeys(obj))
+	_, hasNextStart := obj["next_start"]
+	assert.False(t, hasNextStart, "next_start must be omitted at EOF")
 
 	var out domain.ReadResultJSON
 	require.NoError(t, json.Unmarshal([]byte(raw), &out))

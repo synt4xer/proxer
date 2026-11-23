@@ -38,7 +38,7 @@ func BenchmarkFirstBuild32k(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
 		dbPath := filepath.Join(b.TempDir(), "bench.db")
-		db, err := database.Open(dbPath, indexer.Chunking())
+		db, err := database.Open(dbPath, database.OpenOptions{Chunking: indexer.Chunking()})
 		if err != nil {
 			b.Fatal(err)
 		}

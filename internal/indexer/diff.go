@@ -53,15 +53,15 @@ func (d *Diff) Empty() bool {
 // what it finds with the manifest. Reading and hashing happen here, before the
 // lock is taken, so a file that turns out to be unchanged costs a stat and
 // nothing else.
-func computeDiff(db *sqlx.DB, rootPath string, ignoredDirs []string) (*Diff, error) {
+func computeDiff(db *sqlx.DB, rootPath string, opts IndexOptions) (*Diff, error) {
 	manifest, err := database.Files(db)
 	if err != nil {
 		return nil, err
 	}
 
 	diff := &Diff{}
-	ignoredSet := make(map[string]struct{}, len(ignoredDirs))
-	for _, dir := range ignoredDirs {
+	ignoredSet := make(map[string]struct{}, len(opts.IgnoredDirs))
+	for _, dir := range opts.IgnoredDirs {
 		ignoredSet[dir] = struct{}{}
 	}
 
@@ -81,7 +81,7 @@ func computeDiff(db *sqlx.DB, rootPath string, ignoredDirs []string) (*Diff, err
 			return nil
 		}
 
-		if !filesystem.IsIndexableFileName(entry.Name()) {
+		if ok, _ := filesystem.IsIndexableFileName(entry.Name(), opts.IndexSensitive); !ok {
 			return nil
 		}
 
@@ -158,7 +158,7 @@ func computeDiff(db *sqlx.DB, rootPath string, ignoredDirs []string) (*Diff, err
 // applyDiff writes a computed diff in one transaction. An empty diff never
 // reaches this function, which is what keeps a no-change refresh free of the
 // write lock a concurrent reader would have to queue behind.
-func applyDiff(db *sqlx.DB, rootPath string, diff *Diff) (Refreshed, error) {
+func applyDiff(db *sqlx.DB, rootPath string, diff *Diff, opts IndexOptions) (Refreshed, error) {
 	tx, err := db.Beginx()
 	if err != nil {
 		return Refreshed{}, err
@@ -171,6 +171,7 @@ func applyDiff(db *sqlx.DB, rootPath string, diff *Diff) (Refreshed, error) {
 	}
 
 	var refreshed Refreshed
+	resetPurgeSentinel := opts.IndexSensitive
 
 	for _, rel := range diff.Removed {
 		if err := database.Remove(tx, rel); err != nil {
@@ -181,6 +182,9 @@ func applyDiff(db *sqlx.DB, rootPath string, diff *Diff) (Refreshed, error) {
 	}
 
 	for _, entry := range diff.Touched {
+		if filesystem.IsSensitivePath(entry.Path) {
+			resetPurgeSentinel = true
+		}
 		if err := writer.StoreManifest(entry); err != nil {
 			writer.Close()
 			return Refreshed{}, err
@@ -188,6 +192,9 @@ func applyDiff(db *sqlx.DB, rootPath string, diff *Diff) (Refreshed, error) {
 	}
 
 	for _, entry := range diff.Added {
+		if filesystem.IsSensitivePath(entry.Path) {
+			resetPurgeSentinel = true
+		}
 		// An added file is absent from the manifest, so by construction it has
 		// no stored chunks: skipping the delete keeps a cold build from paying
 		// for a no-op statement per file.
@@ -211,6 +218,9 @@ func applyDiff(db *sqlx.DB, rootPath string, diff *Diff) (Refreshed, error) {
 			}
 			continue
 		}
+		if filesystem.IsSensitivePath(changed.Record.Path) {
+			resetPurgeSentinel = true
+		}
 		stored, err := storeCurrentFile(tx, writer, rootPath, changed.Record, changed.Content, true)
 		if err != nil {
 			writer.Close()
@@ -220,6 +230,13 @@ func applyDiff(db *sqlx.DB, rootPath string, diff *Diff) (Refreshed, error) {
 			refreshed.Changed++
 		} else {
 			refreshed.Skipped++
+		}
+	}
+
+	if resetPurgeSentinel {
+		if err := database.ResetSensitivePurge(tx); err != nil {
+			writer.Close()
+			return Refreshed{}, err
 		}
 	}
 

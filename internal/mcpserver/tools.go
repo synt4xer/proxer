@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/synt4xer/proxer/database"
 	"github.com/synt4xer/proxer/internal/domain"
 	"github.com/synt4xer/proxer/internal/indexer"
 	"github.com/synt4xer/proxer/internal/tools"
@@ -48,9 +49,19 @@ func (s *Server) addIndexTool() {
 			"search does this automatically, so the tool exists for callers that want to pay the cost up front. " +
 			"No parameters are needed: the root is fixed when the server starts.",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, _ indexInput) (*mcp.CallToolResult, domain.IndexResponse, error) {
-		refreshed, err := indexer.IndexProject(s.db, s.root, s.ignoredDirs)
+		refreshed, err := indexer.IndexProjectWithOptions(s.db, s.root, indexer.IndexOptions{
+			IgnoredDirs:    s.ignoredDirs,
+			IndexSensitive: s.indexSensitive,
+		})
 		if err != nil {
 			return nil, domain.IndexResponse{}, err
+		}
+		var scrub database.ScrubResult
+		if s.dbPath != "" {
+			scrub, err = database.ScrubPurgedData(s.db, s.dbPath)
+			if err != nil {
+				return nil, domain.IndexResponse{}, err
+			}
 		}
 		return nil, domain.IndexResponse{
 			Status: "indexed_successfully",
@@ -60,6 +71,9 @@ func (s *Server) addIndexTool() {
 				Removed: refreshed.Removed,
 				Skipped: refreshed.Skipped,
 			},
+			IndexSensitive: s.indexSensitive,
+			PurgePending:   scrub.PurgePending,
+			Warning:        scrub.Warning,
 		}, nil
 	})
 }
@@ -80,11 +94,12 @@ func (s *Server) addSearchTool() {
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in searchInput) (*mcp.CallToolResult, domain.SearchResponse, error) {
 		noRefresh := s.shouldSkipRefresh()
 		response, err := tools.PerformSearch(s.db, s.root, in.Keyword, tools.SearchOptions{
-			NoRefresh:   noRefresh,
-			IgnoredDirs: s.ignoredDirs,
-			Limit:       in.Limit,
-			Kind:        in.Kind,
-			MaxPerFile:  in.MaxPerFile,
+			NoRefresh:      noRefresh,
+			IgnoredDirs:    s.ignoredDirs,
+			IndexSensitive: s.indexSensitive,
+			Limit:          in.Limit,
+			Kind:           in.Kind,
+			MaxPerFile:     in.MaxPerFile,
 		})
 		if err != nil {
 			return nil, domain.SearchResponse{}, err
@@ -155,8 +170,11 @@ func (s *Server) addEditTool() {
 			"The replacement need not have the same number of lines as the range. The file is written atomically. " +
 			"Pass the hash from a prior read of the same file: if the file changed since that read, the edit is rejected and nothing is written. " +
 			"Replacements containing the \" [truncated]\" marker or targeting lines exceeding 4096 characters are also rejected.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in editInput) (*mcp.CallToolResult, domain.EditResultJSON, error) {
-		result, err := tools.PerformEdit(s.db, s.root, in.Filepath, in.Start, in.End, in.Content, in.Hash, s.ignoredDirs)
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in editInput) (*mcp.CallToolResult, domain.EditResultJSON, error) {
+		result, err := tools.PerformEditWithOptions(ctx, s.db, s.root, in.Filepath, in.Start, in.End, in.Content, in.Hash, tools.EditOptions{
+			IgnoredDirs:    s.ignoredDirs,
+			IndexSensitive: s.indexSensitive,
+		})
 		if err != nil {
 			return nil, domain.EditResultJSON{}, err
 		}
