@@ -30,7 +30,6 @@ type Chunking struct {
 	Overlap int
 }
 
-// OpenOptions configures database.Open.
 type OpenOptions struct {
 	Chunking       Chunking
 	IndexSensitive bool

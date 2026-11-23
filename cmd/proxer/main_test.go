@@ -119,7 +119,6 @@ func TestCLIVersion(t *testing.T) {
 func TestCLIGoldenEnvelopes(t *testing.T) {
 	root := setupFixtureRoot(t)
 
-	// 1. index
 	code, stdout, stderr := runCLI([]string{"--root", root, "index"}, "")
 	indexObj := decodeSingleLineJSON(t, code, stdout, stderr)
 	assertJSONSchema(t, indexObj, map[string]jsonType{
@@ -136,7 +135,6 @@ func TestCLIGoldenEnvelopes(t *testing.T) {
 	})
 	assert.Equal(t, 2, unmarshalJSON[int](t, refreshedObj["added"]))
 
-	// 2. search (with refresh)
 	code, stdout, stderr = runCLI([]string{"--root", root, "search", "-k", "ComputeAnswer"}, "")
 	assert.Contains(t, stdout, "<b>ComputeAnswer</b>", "HTML tags in snippets must not be escaped")
 	assert.NotContains(t, stdout, `\u003c`)
@@ -167,7 +165,6 @@ func TestCLIGoldenEnvelopes(t *testing.T) {
 	})
 	assert.Equal(t, "main.go", unmarshalJSON[string](t, firstResult["filepath"]))
 
-	// 3. read
 	code, stdout, stderr = runCLI([]string{"--root", root, "read", "-f", "main.go", "-s", "1", "-e", "5"}, "")
 	readObj := decodeSingleLineJSON(t, code, stdout, stderr)
 	assertJSONSchema(t, readObj, map[string]jsonType{
@@ -189,7 +186,6 @@ func TestCLIGoldenEnvelopes(t *testing.T) {
 	hash := unmarshalJSON[string](t, readObj["hash"])
 	require.NotEmpty(t, hash)
 
-	// 4. edit (with --hash and stdin replacement)
 	code, stdout, stderr = runCLI(
 		[]string{"--root", root, "edit", "-f", "main.go", "-s", "3", "-e", "5", "--hash", hash},
 		"func ComputeAnswer() int {\n\treturn 99\n}",
@@ -201,7 +197,6 @@ func TestCLIGoldenEnvelopes(t *testing.T) {
 	})
 	assert.Equal(t, "success", unmarshalJSON[string](t, editObj["status"]))
 
-	// Verify edit reindexed the file immediately
 	code, stdout, stderr = runCLI([]string{"--root", root, "search", "-k", "99", "--no-refresh"}, "")
 	afterEditObj := decodeSingleLineJSON(t, code, stdout, stderr)
 	assert.Equal(t, 1, unmarshalJSON[int](t, afterEditObj["total"]))
@@ -213,14 +208,12 @@ func TestCLISearchFlagsAndNoRefresh(t *testing.T) {
 	code, stdout, stderr := runCLI([]string{"--root", root, "index"}, "")
 	decodeSingleLineJSON(t, code, stdout, stderr)
 
-	// Add a new file on disk after indexing.
 	require.NoError(t, os.WriteFile(
 		filepath.Join(root, "extra.go"),
 		[]byte("package main\n\nfunc BrandNewSymbol() {}\n"),
 		0o644,
 	))
 
-	// --no-refresh omits refreshed key and does not see the new file.
 	code, stdout, stderr = runCLI([]string{"--root", root, "search", "-k", "BrandNewSymbol", "--no-refresh"}, "")
 	noRefreshObj := decodeSingleLineJSON(t, code, stdout, stderr)
 	assertJSONSchema(t, noRefreshObj, map[string]jsonType{
@@ -234,7 +227,6 @@ func TestCLISearchFlagsAndNoRefresh(t *testing.T) {
 	assert.False(t, hasRefreshed)
 	assert.Equal(t, 0, unmarshalJSON[int](t, noRefreshObj["total"]))
 
-	// PROXER_NO_REFRESH=1 has the same effect without the flag.
 	t.Setenv(config.NoRefreshEnvVar, "1")
 	code, stdout, stderr = runCLI([]string{"--root", root, "search", "-k", "BrandNewSymbol"}, "")
 	envObj := decodeSingleLineJSON(t, code, stdout, stderr)
@@ -242,7 +234,6 @@ func TestCLISearchFlagsAndNoRefresh(t *testing.T) {
 	assert.False(t, hasRefreshed)
 	assert.Equal(t, 0, unmarshalJSON[int](t, envObj["total"]))
 
-	// --kind and -n flags filter and bound results.
 	code, stdout, stderr = runCLI([]string{"--root", root, "search", "-k", "ComputeAnswer", "--kind", "docs", "-n", "1"}, "")
 	docsObj := decodeSingleLineJSON(t, code, stdout, stderr)
 	results := unmarshalJSON[[]map[string]jsontext.Value](t, docsObj["results"])
@@ -253,7 +244,6 @@ func TestCLISearchFlagsAndNoRefresh(t *testing.T) {
 func TestCLIErrorPaths(t *testing.T) {
 	root := setupFixtureRoot(t)
 
-	// Index once so DB exists for read/edit error tests.
 	code, stdout, stderr := runCLI([]string{"--root", root, "index"}, "")
 	decodeSingleLineJSON(t, code, stdout, stderr)
 
@@ -343,7 +333,6 @@ func TestCLISensitiveExclusionAndOptInToggle(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(root, ".envoy.yaml"), []byte("envoy_cluster: ok\n"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "secrets.go"), []byte("package main\nfunc LoadSecrets() {}\n"), 0o644))
 
-	// Default (index_sensitive: false): sensitive files excluded, boundary & template files indexed.
 	code, stdout, stderr := runCLI([]string{"--root", root, "index"}, "")
 	idxObj := decodeSingleLineJSON(t, code, stdout, stderr)
 	refreshed := unmarshalJSON[map[string]jsontext.Value](t, idxObj["refreshed"])
@@ -353,7 +342,6 @@ func TestCLISensitiveExclusionAndOptInToggle(t *testing.T) {
 	searchObj := decodeSingleLineJSON(t, code, stdout, stderr)
 	assert.Equal(t, 0, unmarshalJSON[int](t, searchObj["total"]))
 
-	// Opt-in via .proxer.json: index_sensitive: true surfaces in index & search payloads.
 	require.NoError(t, os.WriteFile(filepath.Join(root, config.ConfigFile), []byte(`{"index_sensitive": true}`), 0o644))
 	code, stdout, stderr = runCLI([]string{"--root", root, "index"}, "")
 	optInIdx := decodeSingleLineJSON(t, code, stdout, stderr)
@@ -364,8 +352,6 @@ func TestCLISensitiveExclusionAndOptInToggle(t *testing.T) {
 	assert.True(t, unmarshalJSON[bool](t, optInSearch["index_sensitive"]))
 	assert.Equal(t, 1, unmarshalJSON[int](t, optInSearch["total"]))
 
-	// Toggle back to index_sensitive: false -> Stage 1 purges on Open, search shows purge_pending=true,
-	// then explicit index runs Stage 2 and clears purge_pending + scrubs secret bytes.
 	require.NoError(t, os.WriteFile(filepath.Join(root, config.ConfigFile), []byte(`{"index_sensitive": false}`), 0o644))
 	code, stdout, stderr = runCLI([]string{"--root", root, "search", "-k", "topsecret123", "--no-refresh"}, "")
 	afterToggleSearch := decodeSingleLineJSON(t, code, stdout, stderr)

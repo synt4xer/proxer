@@ -106,11 +106,8 @@ func RefreshDisabled() bool {
 	return true
 }
 
-// ConfigFile is the optional per-project configuration read from the project
-// root.
 const ConfigFile = ".proxer.json"
 
-// ProjectConfig is the on-disk shape of ConfigFile.
 type ProjectConfig struct {
 	IgnoredDirs    []string `json:"ignored_dirs"`
 	IndexSensitive bool     `json:"index_sensitive"`
@@ -154,8 +151,6 @@ func LoadProjectConfig(root string) (ProjectConfig, error) {
 	return result, nil
 }
 
-// LoadIgnoredDirs returns DefaultIgnoredDirs extended with the directories the
-// project lists in ConfigFile.
 func LoadIgnoredDirs(root string) ([]string, error) {
 	cfg, err := LoadProjectConfig(root)
 	if err != nil {

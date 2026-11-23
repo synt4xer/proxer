@@ -12,7 +12,6 @@ import (
 	"github.com/synt4xer/proxer/internal/filesystem"
 )
 
-// IndexOptions configures project indexing and single-file reindexing.
 type IndexOptions struct {
 	IgnoredDirs    []string
 	IndexSensitive bool
@@ -34,7 +33,6 @@ func IndexProject(db *sqlx.DB, rootPath string, ignoredDirs []string) (Refreshed
 	return IndexProjectWithOptions(db, rootPath, IndexOptions{IgnoredDirs: ignoredDirs})
 }
 
-// IndexProjectWithOptions runs IndexProject with full indexing options.
 func IndexProjectWithOptions(db *sqlx.DB, rootPath string, opts IndexOptions) (Refreshed, error) {
 	diff, err := computeDiff(db, rootPath, opts)
 	if err != nil {
@@ -62,8 +60,6 @@ func ReindexFileContent(db *sqlx.DB, rootPath, path string, content []byte, igno
 	return reindexFileWithContent(db, rootPath, path, content, true, IndexOptions{IgnoredDirs: ignoredDirs})
 }
 
-// ReindexFileContentWithOptions replaces the stored chunks and manifest row of
-// a single file using already-known bytes and full indexing options.
 func ReindexFileContentWithOptions(db *sqlx.DB, rootPath, path string, content []byte, opts IndexOptions) error {
 	return reindexFileWithContent(db, rootPath, path, content, true, opts)
 }

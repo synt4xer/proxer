@@ -18,7 +18,6 @@ import (
 // reindexFileContent is overridden in tests to simulate post-write reindex failures.
 var reindexFileContent = indexer.ReindexFileContentWithOptions
 
-// EditOptions configures PerformEditWithOptions.
 type EditOptions struct {
 	IgnoredDirs    []string
 	IndexSensitive bool

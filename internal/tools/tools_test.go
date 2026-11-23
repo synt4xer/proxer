@@ -521,8 +521,6 @@ func resultPaths(response domain.SearchResponse) []string {
 	return out
 }
 
-// mustIndex runs a delta build and fails the test if it errors. The build is
-// incremental now, so most call sites only care that it succeeded.
 func mustIndex(t *testing.T, db *sqlx.DB, rootPath string, ignoredDirs []string) indexer.Refreshed {
 	t.Helper()
 
@@ -657,12 +655,10 @@ func TestPerformSearchPriority2RankingAndSubtokens(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 
-	// 1. CamelCase / PascalCase sub-tokenization
 	require.NoError(t, os.WriteFile(filepath.Join(root, "auth.go"), []byte(
 		"package auth\n\nfunc AuthMiddleware(r sqlRepo) *HTTPServer {\n\treturn nil\n}\n",
 	), 0o644))
 
-	// 2. Multi-term AND-first with OR fallback
 	require.NoError(t, os.WriteFile(filepath.Join(root, "cooccur.go"), []byte(
 		"package auth\n\nfunc VerifySessionToken() {\n\t// verify session token together\n}\n",
 	), 0o644))
@@ -670,7 +666,6 @@ func TestPerformSearchPriority2RankingAndSubtokens(t *testing.T) {
 		"package auth\n\n// token token token token token\nfunc TokenOnly() {}\n",
 	), 0o644))
 
-	// 3. Soft BM25 multiplier: strong doc match (path + dense body) vs weak 1-token code hit
 	var weakBuf strings.Builder
 	weakBuf.WriteString("package auth\n\n// architecture note\n")
 	for i := 0; i < 25; i++ {
@@ -697,7 +692,6 @@ func TestPerformSearchPriority2RankingAndSubtokens(t *testing.T) {
 		assert.Equal(t, "cooccur.go", res.Results[0].Filepath, "AND match must rank above OR-only match")
 		assert.Equal(t, "noise1.go", res.Results[1].Filepath, "OR fallback must still include single-term match")
 
-		// Pure OR fallback when AND has 0 results
 		resFallback, err := tools.PerformSearch(db, root, "verify nonexistentterm", tools.SearchOptions{Limit: 5})
 		require.NoError(t, err)
 		require.NotEmpty(t, resFallback.Results)
@@ -716,8 +710,6 @@ func TestPerformSearchPriority2RankingAndSubtokens(t *testing.T) {
 func TestSearchMaxPerFileReturnsNonOverlappingChunks(t *testing.T) {
 	root, db := newToolWorkspace(t)
 
-	// Write a 180-line file with distinct target regions near line 10 and line 150
-	// so two chunks match without overlapping.
 	lines := make([]string, 180)
 	for i := range lines {
 		lines[i] = fmt.Sprintf("var filler%d = %d", i+1, i+1)

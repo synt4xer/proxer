@@ -77,7 +77,6 @@ func TestDBFilePermissions0600(t *testing.T) {
 	assertMode0600(t, dbPath)
 	require.NoError(t, db.Close())
 
-	// Simulate a pre-existing 0644 database and verify Open tightens it to 0600.
 	require.NoError(t, os.Chmod(dbPath, 0o644))
 	db2, err := Open(dbPath, OpenOptions{Chunking: Chunking{Size: 60, Overlap: 15}})
 	require.NoError(t, err)
@@ -90,8 +89,6 @@ func TestSensitivePurgeStage1AndStage2(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), ".proxer.db")
 	seedLeakedDB(t, dbPath, secret)
 
-	// Stage 1: writable Open with IndexSensitive=false removes sensitive rows
-	// and marks meta.sensitive_purge="1" + meta.purge_pending="1" without VACUUM.
 	db, err := Open(dbPath, OpenOptions{
 		Chunking:       Chunking{Size: 60, Overlap: 15},
 		IndexSensitive: false,
@@ -113,7 +110,6 @@ func TestSensitivePurgeStage1AndStage2(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, pending)
 
-	// Low-disk-space Stage 2: skips VACUUM gracefully without error and preserves purge_pending.
 	origAvail := availableDiskBytes
 	availableDiskBytes = func(string) (uint64, error) { return 1, nil }
 	lowDiskRes, err := ScrubPurgedData(db, dbPath)
@@ -128,7 +124,6 @@ func TestSensitivePurgeStage1AndStage2(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, pending, "purge_pending must stay set after low-disk skip")
 
-	// Normal Stage 2 (no other reader): optimize + VACUUM + wal_checkpoint(TRUNCATE).
 	scrubRes, err := ScrubPurgedData(db, dbPath)
 	require.NoError(t, err)
 	assert.True(t, scrubRes.Attempted)
@@ -149,8 +144,7 @@ func TestSensitivePurgeStage2ConcurrentReaderKeepsPurgePending(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), ".proxer.db")
 	seedLeakedDB(t, dbPath, secret)
 
-	// Open a second connection and hold an active read transaction (BEGIN DEFERRED + SELECT)
-	// so WAL cannot truncate while Stage 2 runs.
+	// Hold an active read snapshot so WAL cannot truncate while Stage 2 runs.
 	reader, err := sqlx.Connect("sqlite", "file:"+filepath.ToSlash(dbPath)+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
 	require.NoError(t, err)
 	readerConn, err := reader.Conn(context.Background())
@@ -167,7 +161,6 @@ func TestSensitivePurgeStage2ConcurrentReaderKeepsPurgePending(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	// Stage 2 while reader holds a snapshot: busy != 0 -> purge_pending stays "1" with warning.
 	scrubBlocked, err := ScrubPurgedData(db, dbPath)
 	require.NoError(t, err)
 	assert.True(t, scrubBlocked.Attempted)
@@ -179,7 +172,6 @@ func TestSensitivePurgeStage2ConcurrentReaderKeepsPurgePending(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, pending)
 
-	// Release reader and re-run Stage 2 -> completes cleanly and scrubs all secret bytes.
 	_, err = readerConn.ExecContext(context.Background(), "ROLLBACK")
 	require.NoError(t, err)
 	require.NoError(t, readerConn.Close())

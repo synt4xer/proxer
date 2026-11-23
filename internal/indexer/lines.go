@@ -26,7 +26,6 @@ func TruncateLine(line string, maxWidth int) string {
 	return line
 }
 
-// HasLongLine reports whether any line in content exceeds maxWidth runes.
 func HasLongLine(content []byte, maxWidth int) bool {
 	if maxWidth <= 0 {
 		return false

@@ -10,7 +10,6 @@ import (
 	"github.com/synt4xer/proxer/internal/filesystem"
 )
 
-// mockFileInfo implements fs.FileInfo for testing purposes
 type mockFileInfo struct {
 	name  string
 	size  int64

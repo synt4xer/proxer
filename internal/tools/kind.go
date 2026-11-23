@@ -113,7 +113,6 @@ func parseKind(value string) (fileKind, error) {
 // caught.
 const docsPathMatch = "(filepath:md OR filepath:mdx OR filepath:txt OR filepath:rst)"
 
-// restrictToDocs narrows a match to documentation paths.
 func restrictToDocs(matchQuery string) string {
 	return "(" + matchQuery + ") AND " + docsPathMatch
 }
@@ -125,8 +124,6 @@ func excludeDocs(matchQuery string) string {
 	return "(" + matchQuery + ") NOT " + docsPathMatch
 }
 
-// partitionByKind groups candidates by demotion class, keeping the order they
-// were ranked in inside each group.
 func partitionByKind(candidates []domain.SearchResultDB) [4][]domain.SearchResultDB {
 	var groups [4][]domain.SearchResultDB
 	for _, candidate := range candidates {
