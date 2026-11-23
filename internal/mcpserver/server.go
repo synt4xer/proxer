@@ -16,7 +16,7 @@ import (
 const defaultRefreshCooldown = 2 * time.Second
 
 // Version is reported to MCP clients during initialization.
-const Version = "0.5.0"
+const Version = config.Version
 
 const instructions = `proxer indexes a local project and exposes four tools: index, search, read, and edit.
 

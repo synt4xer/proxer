@@ -23,8 +23,9 @@ func main() {
 	var db *sqlx.DB
 
 	var rootCmd = &cobra.Command{
-		Use:   "proxer",
-		Short: "Project Indexer - Local codebase retriever and editor for AI Agents",
+		Use:     "proxer",
+		Short:   "Project Indexer - Local codebase retriever and editor for AI Agents",
+		Version: config.Version,
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
 			rootFlag, err := cmd.Flags().GetString("root")
 			if err != nil {
