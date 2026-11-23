@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/synt4xer/proxer/internal/config"
 	"github.com/synt4xer/proxer/internal/domain"
 )
 
@@ -27,13 +28,6 @@ const (
 // then docs, then assets. It is a filter value rather than a fileKind because
 // no file is "all kinds".
 const kindAll = fileKind(-1)
-
-var docExtensions = map[string]struct{}{
-	".md":  {},
-	".mdx": {},
-	".txt": {},
-	".rst": {},
-}
 
 // assetLockfiles are dependency locks: generated, large, and never what a code
 // question is asking for.
@@ -57,7 +51,8 @@ var assetLockfiles = map[string]struct{}{
 // already cover the file the field report hit (static/htmx.min.js) as well as
 // test files that would otherwise outrank the symbol they test.
 func classifyPath(filePath string) fileKind {
-	base := strings.ToLower(filepath.Base(filePath))
+	rawBase := filepath.Base(filePath)
+	base := strings.ToLower(rawBase)
 
 	if strings.Contains(base, ".min.") || filepath.Ext(base) == ".map" {
 		return kindAssets
@@ -65,7 +60,10 @@ func classifyPath(filePath string) fileKind {
 	if _, ok := assetLockfiles[base]; ok {
 		return kindAssets
 	}
-	if _, ok := docExtensions[strings.ToLower(filepath.Ext(base))]; ok {
+	if kind, ok := config.AllowedExactNames[rawBase]; ok && kind == config.KindDocs {
+		return kindDocs
+	}
+	if kind, ok := config.AllowedExtensions[strings.ToLower(filepath.Ext(base))]; ok && kind == config.KindDocs {
 		return kindDocs
 	}
 	if isTestPath(filePath, base) {
@@ -107,11 +105,26 @@ func parseKind(value string) (fileKind, error) {
 }
 
 // docsPathMatch constrains an FTS5 expression to the paths of documentation.
-// FTS5 tokenizes a path into its segments, so ".md" becomes the token "md".
-// The filter is a coarse pre-filter for the query; the exact classification
+// Derived from config.AllowedExtensions so the pre-filter and registry cannot
+// drift. The filter is a coarse pre-filter for the query; exact classification
 // still happens in Go, where a path with a doc token in a directory name is
 // caught.
-const docsPathMatch = "(filepath:md OR filepath:mdx OR filepath:txt OR filepath:rst)"
+var docsPathMatch = buildDocsPathMatch()
+
+func buildDocsPathMatch() string {
+	exts := make([]string, 0, 4)
+	for ext, kind := range config.AllowedExtensions {
+		if kind == config.KindDocs {
+			exts = append(exts, strings.TrimPrefix(ext, "."))
+		}
+	}
+	sort.Strings(exts)
+	clauses := make([]string, len(exts))
+	for i, ext := range exts {
+		clauses[i] = "filepath:" + ext
+	}
+	return "(" + strings.Join(clauses, " OR ") + ")"
+}
 
 func restrictToDocs(matchQuery string) string {
 	return "(" + matchQuery + ") AND " + docsPathMatch
