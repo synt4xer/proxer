@@ -205,19 +205,16 @@ func TestServerCoalescesRapidSearchRefreshes(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { cs.Close() })
 
-	// First search refreshes the index.
 	var first domain.SearchResponse
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, callTool(t, cs, "search", map[string]any{"keyword": "ProcessData"}))), &first))
 	require.NotNil(t, first.Refreshed)
 	assert.Equal(t, 1, first.Refreshed.Added)
 
-	// Immediate follow-up within cooldown skips the directory walk.
 	clock = clock.Add(500 * time.Millisecond)
 	var second domain.SearchResponse
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, callTool(t, cs, "search", map[string]any{"keyword": "ProcessData"}))), &second))
 	assert.Nil(t, second.Refreshed, "search within cooldown should skip refresh")
 
-	// edit invalidates the cooldown immediately.
 	var read domain.ReadResultJSON
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, callTool(t, cs, "read", map[string]any{"filepath": "main.go"}))), &read))
 	editRes := callTool(t, cs, "edit", map[string]any{
@@ -233,7 +230,6 @@ func TestServerCoalescesRapidSearchRefreshes(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, callTool(t, cs, "search", map[string]any{"keyword": "cooldown"}))), &afterEdit))
 	require.NotNil(t, afterEdit.Refreshed, "edit must invalidate refresh cooldown")
 
-	// Advancing past the cooldown triggers a fresh walk.
 	clock = clock.Add(defaultRefreshCooldown + time.Millisecond)
 	var afterCooldown domain.SearchResponse
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, callTool(t, cs, "search", map[string]any{"keyword": "cooldown"}))), &afterCooldown))

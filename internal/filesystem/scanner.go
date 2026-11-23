@@ -10,7 +10,6 @@ import (
 	"github.com/synt4xer/proxer/internal/config"
 )
 
-// SkipReason classifies why a file was excluded from indexing.
 type SkipReason string
 
 const (
@@ -66,8 +65,6 @@ func toSet(items []string) map[string]struct{} {
 	return set
 }
 
-// IsIgnoredDirName reports whether a directory name is one the index must skip.
-// Names are matched whole, at any depth.
 func IsIgnoredDirName(name string, ignoredDirs []string) bool {
 	return slices.Contains(ignoredDirs, name)
 }
@@ -135,8 +132,6 @@ func IsSensitiveFileName(baseName string) bool {
 	return false
 }
 
-// IsSensitivePath reports whether a relative or absolute file path refers to a
-// sensitive file by normalizing to its base filename.
 func IsSensitivePath(relPath string) bool {
 	return IsSensitiveFileName(path.Base(filepath.ToSlash(relPath)))
 }
@@ -144,18 +139,15 @@ func IsSensitivePath(relPath string) bool {
 // IsIndexableFileName reports whether a file's base name or extension is
 // eligible for indexing, without requiring an fs.FileInfo stat call.
 func IsIndexableFileName(baseName string, indexSensitive bool) (bool, SkipReason) {
-	// Step 1: safe template allowlist (exact match).
 	if _, ok := safeEnvTemplates[baseName]; ok {
 		return true, SkipNone
 	}
 
-	// Step 2: sensitive denylist (unless explicitly opted in).
 	sensitive := IsSensitiveFileName(baseName)
 	if !indexSensitive && sensitive {
 		return false, SkipSensitive
 	}
 
-	// Step 3 & 4: standard allowlist (plus opted-in sensitive files).
 	if _, ok := allowedExactNames[baseName]; ok {
 		return true, SkipNone
 	}

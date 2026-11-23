@@ -43,7 +43,6 @@ func TestPerformRead64KBCapAndEditCompatibility(t *testing.T) {
 	assert.Equal(t, res.EndLine+1, res.NextStart)
 	assert.True(t, strings.HasSuffix(res.Content, "\n"), "truncation must occur on a whole-line boundary")
 
-	// The full-file hash from a truncated read must be accepted by PerformEdit.
 	editRes, err := PerformEdit(db, root, "huge.go", 2, 2, "line_00002 := \"edited\"", res.Hash, config.DefaultIgnoredDirs)
 	require.NoError(t, err)
 	assert.Equal(t, "success", editRes.Status)
@@ -57,7 +56,6 @@ func TestPerformReadNextStartVisibility(t *testing.T) {
 	}
 	require.NoError(t, os.WriteFile(filepath.Join(root, "medium.go"), []byte(b.String()), 0o644))
 
-	// Default 1..60 slice on a 500-line file: truncated=false, next_start=61.
 	first, err := PerformRead(root, "medium.go", 1, 60)
 	require.NoError(t, err)
 	assert.Equal(t, 1, first.StartLine)
@@ -66,7 +64,6 @@ func TestPerformReadNextStartVisibility(t *testing.T) {
 	assert.False(t, first.Truncated)
 	assert.Equal(t, 61, first.NextStart)
 
-	// Reading through EOF (line 500) omits next_start (0).
 	last, err := PerformRead(root, "medium.go", 450, 500)
 	require.NoError(t, err)
 	assert.Equal(t, 450, last.StartLine)
@@ -80,7 +77,6 @@ func TestPerformSearchDefensiveFilterOnReadOnlyLeakedDB(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, config.DBFile)
 
-	// Build a leaked DB containing .env, config/prod.env, and main.go.
 	db, err := database.Open(dbPath, database.OpenOptions{
 		Chunking:       indexer.Chunking(),
 		IndexSensitive: true,
@@ -99,7 +95,6 @@ func TestPerformSearchDefensiveFilterOnReadOnlyLeakedDB(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 
-	// Open the un-purged DB read-only (?mode=ro) and run search --no-refresh with IndexSensitive=false.
 	roDB, err := sqlx.Connect("sqlite", "file:"+filepath.ToSlash(dbPath)+"?mode=ro")
 	require.NoError(t, err)
 	defer roDB.Close()

@@ -71,7 +71,6 @@ func identifierTails(content string) string {
 	n := len(content)
 	i := 0
 	for i < n {
-		// Advance to start of an identifier word (letter or digit; '_' separates words).
 		for i < n && !isWordByteOrRuneStart(content, i) {
 			i++
 		}
@@ -163,7 +162,6 @@ func appendLowerASCIIUnique(seen *[]string, out *strings.Builder, s string, buf 
 			}
 			buf[idx] = b
 		}
-		// Check seen before allocating string
 		candidate := buf[:len(s)]
 		for _, prev := range *seen {
 			if len(prev) == len(candidate) && stringEqualBytes(prev, candidate) {

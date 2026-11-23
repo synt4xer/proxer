@@ -13,7 +13,6 @@ import (
 // availableDiskBytes is overridden in tests to exercise low-disk-space paths.
 var availableDiskBytes = platformAvailableDiskBytes
 
-// ScrubResult summarizes Stage 2 plaintext disk reclamation.
 type ScrubResult struct {
 	Attempted    bool
 	Completed    bool
@@ -21,8 +20,6 @@ type ScrubResult struct {
 	Warning      string
 }
 
-// ChmodDBFiles enforces 0600 owner-only permissions on dbPath and its WAL/SHM
-// siblings if present on disk.
 func ChmodDBFiles(dbPath string) error {
 	for _, p := range []string{dbPath, dbPath + "-wal", dbPath + "-shm"} {
 		if err := os.Chmod(p, 0o600); err != nil && !errors.Is(err, os.ErrNotExist) {

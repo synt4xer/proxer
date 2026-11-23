@@ -19,11 +19,8 @@ const (
 )
 
 // CheckWritable verifies that db accepts writes before a caller mutates files
-// on disk. It pins a single *sql.Conn, lowers busy_timeout to 250 ms with a
-// cancel-safe restore to 5000 ms, and executes a real no-op UPDATE inside a
-// rolled-back BEGIN IMMEDIATE transaction. A bare BEGIN IMMEDIATE + ROLLBACK
-// returns nil on ?mode=ro and 0444 files in modernc.org/sqlite, so the no-op
-// UPDATE is required to detect read-only databases accurately.
+// on disk. A bare BEGIN IMMEDIATE + ROLLBACK returns nil on ?mode=ro and 0444
+// files in modernc.org/sqlite, so a rolled-back no-op UPDATE is required.
 func CheckWritable(ctx context.Context, db *sqlx.DB) error {
 	conn, err := db.Conn(ctx)
 	if err != nil {
@@ -57,8 +54,6 @@ func CheckWritable(ctx context.Context, db *sqlx.DB) error {
 	return updateErr
 }
 
-// IsReadOnlyError reports whether err indicates a read-only database or
-// filesystem permission failure.
 func IsReadOnlyError(err error) bool {
 	if err == nil {
 		return false
@@ -72,7 +67,6 @@ func IsReadOnlyError(err error) bool {
 		strings.Contains(msg, "permission denied")
 }
 
-// IsBusyError reports whether err indicates SQLite lock contention.
 func IsBusyError(err error) bool {
 	if err == nil {
 		return false

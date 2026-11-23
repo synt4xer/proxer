@@ -251,7 +251,6 @@ func TestReindexFileKeepsTheChunkMapAligned(t *testing.T) {
 	write(t, path, "func Grow() {}\n")
 	mustIndex(t, db, root, ignored)
 
-	// Shrink from several chunks to one, then check both stores agree.
 	var big string
 	big = "func Grow() {}\n"
 	for i := 0; i < config.ChunkSize*2; i++ {
@@ -299,7 +298,6 @@ func TestDeltaBuildSkipsLongLineFiles(t *testing.T) {
 	db := openWorkspaceDB(t, root)
 	ignored := config.DefaultIgnoredDirs
 
-	// Single-line file exceeding config.MaxLineWidth (e.g. 5,000 characters).
 	longContent := "// minified " + strings.Repeat("x", config.MaxLineWidth+100) + "\n"
 	write(t, filepath.Join(root, "bundle.min.js"), longContent)
 
@@ -309,7 +307,6 @@ func TestDeltaBuildSkipsLongLineFiles(t *testing.T) {
 		assert.Empty(t, chunkRowIDs(t, db, "bundle.min.js"), "skipped files must have no chunk rows")
 		assert.Zero(t, countChunks(t, db, "bundle.min.js"))
 
-		// Manifest must still record the file so subsequent walks skip re-reading it.
 		var count int
 		require.NoError(t, db.Get(&count, "SELECT COUNT(*) FROM indexed_files WHERE filepath = ?", "bundle.min.js"))
 		assert.Equal(t, 1, count, "skipped files must be present in the manifest to prevent re-reading on every search")
@@ -349,7 +346,6 @@ func TestReindexFileSkipsLongLines(t *testing.T) {
 	mustIndex(t, db, root, ignored)
 	require.NotEmpty(t, chunkRowIDs(t, db, "code.js"))
 
-	// Rewrite to have a line exceeding config.MaxLineWidth
 	longContent := "function long() {" + strings.Repeat("z", config.MaxLineWidth+50) + "}"
 	write(t, path, longContent)
 	require.NoError(t, indexer.ReindexFile(db, root, path, ignored))
@@ -381,7 +377,6 @@ func TestIndexTruncatesEmbeddedLongLineInMultiLineSourceFile(t *testing.T) {
 	assert.Contains(t, storedChunk, config.TruncationMarker, "oversized line must be truncated inside stored chunk")
 	assert.Less(t, len(storedChunk), config.MaxLineWidth+200, "stored chunk must stay bounded instead of storing the raw blob")
 
-	// Subsequent no-change delta build must recognize the untruncated on-disk size/mtime/hash.
 	refreshedAgain := mustIndex(t, db, root, ignored)
 	assert.True(t, refreshedAgain.Empty(), "manifest must record the real on-disk file so subsequent walks do no work: %+v", refreshedAgain)
 }

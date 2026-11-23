@@ -15,21 +15,18 @@ import (
 
 const defaultRefreshCooldown = 2 * time.Second
 
-// Version is reported to MCP clients during initialization.
 const Version = config.Version
 
 const instructions = `proxer indexes a local project and exposes four tools: index, search, read, and edit.
 
 Paths passed to read and edit are relative to the project root; absolute paths inside the root are also accepted. A path that resolves outside the root is rejected, never clamped or rewritten. search refreshes the index before it queries, so files changed by other tools are found without calling index first; index is still there to pay that cost up front. Search to locate code, read before editing, and edit reindexes the file it changes.`
 
-// Options configures an MCP server instance.
 type Options struct {
 	IgnoredDirs    []string
 	IndexSensitive bool
 	DBPath         string
 }
 
-// Server serves one MCP client against one project root.
 type Server struct {
 	db              *sqlx.DB
 	root            string
@@ -50,7 +47,6 @@ func New(db *sqlx.DB, root string, ignoredDirs []string) *Server {
 	return NewWithOptions(db, root, Options{IgnoredDirs: ignoredDirs})
 }
 
-// NewWithOptions builds the MCP server with full project options.
 func NewWithOptions(db *sqlx.DB, root string, opts Options) *Server {
 	// A harness spawns the server once, so the environment is read here rather
 	// than per tool call. PROXER_NO_REFRESH=1 turns every search into a pure

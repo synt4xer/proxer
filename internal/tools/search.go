@@ -18,11 +18,9 @@ const (
 	defaultLimit = 5
 	// maxLimit bounds what a caller may ask for. A wider answer stops being a
 	// locator and becomes the raw scan the tool exists to replace.
-	maxLimit = 50
-	// defaultMaxPerFile keeps search slots focused on distinct files by default.
+	maxLimit          = 50
 	defaultMaxPerFile = 1
-	// maxChunksPerFile caps how many non-overlapping chunks one file can take.
-	maxChunksPerFile = 5
+	maxChunksPerFile  = 5
 	// candidateWindowFactor widens the ranked window beyond the requested
 	// limit, so dedupe and demotion still have candidates left once the cap
 	// applies. Ranking cost is dominated by the match, not the width, so the
@@ -84,7 +82,6 @@ func searchTerms(keyword string) []string {
 	})
 }
 
-// buildMatchQuery converts free-form agent input into an OR FTS5 expression.
 func buildMatchQuery(keyword string) (string, bool) {
 	_, orQuery, _, ok := buildMatchQueries(keyword)
 	return orQuery, ok
