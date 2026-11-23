@@ -1,23 +1,14 @@
 package tools
 
-import (
-	"bytes"
-	"encoding/json"
-	"strings"
-)
+import json "encoding/json/v2"
 
-// EncodeJSON serializes v like json.Marshal but without HTML escaping.
-// Search snippets wrap matches in <b> tags, and encoding those as \u003c makes
-// stdout needlessly hard to read. Angle brackets are valid inside a JSON string;
-// escaping them only matters when the JSON is embedded in HTML, which is not
-// what this CLI emits. The encoder's trailing newline is dropped so callers keep
-// printing exactly one line.
+// EncodeJSON serializes v as compact, single-line JSON without HTML escaping.
+// Search snippets wrap matches in <b> tags, and encoding/json/v2 leaves angle
+// brackets literal by default without adding a trailing newline.
 func EncodeJSON(v any) (string, error) {
-	var buf bytes.Buffer
-	encoder := json.NewEncoder(&buf)
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(v); err != nil {
+	out, err := json.Marshal(v)
+	if err != nil {
 		return "", err
 	}
-	return strings.TrimSuffix(buf.String(), "\n"), nil
+	return string(out), nil
 }
