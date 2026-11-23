@@ -20,6 +20,12 @@ type RefreshSummary struct {
 	Skipped int `json:"skipped"`
 }
 
+// IndexResponse is the envelope returned by the index command and MCP tool.
+type IndexResponse struct {
+	Status    string         `json:"status" jsonschema:"human-readable result of the index run"`
+	Refreshed RefreshSummary `json:"refreshed" jsonschema:"files added, changed, removed, and skipped by this run; all zero when the index was already current"`
+}
+
 // SearchResponse is the envelope around a result set. The index metadata leads
 // so a caller sees whether the answer came from the tree it is looking at before
 // it reads the results. Total counts every matching chunk, so Truncated is a

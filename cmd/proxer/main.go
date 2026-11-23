@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -10,72 +11,95 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/synt4xer/proxer/database"
 	"github.com/synt4xer/proxer/internal/config"
+	"github.com/synt4xer/proxer/internal/domain"
 	"github.com/synt4xer/proxer/internal/indexer"
 	"github.com/synt4xer/proxer/internal/tools"
 )
 
 const manageDBAnnotation = "ownDB"
 
-var root string
-var ignoredDirs []string
+type cliState struct {
+	root        string
+	ignoredDirs []string
+	db          *sqlx.DB
+}
 
 func main() {
-	var db *sqlx.DB
+	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
+}
 
-	var rootCmd = &cobra.Command{
+func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	state := &cliState{}
+	defer func() {
+		if state.db != nil {
+			state.db.Close()
+		}
+	}()
+
+	rootCmd := newRootCommand(state)
+	rootCmd.SetArgs(args)
+	rootCmd.SetIn(stdin)
+	rootCmd.SetOut(stdout)
+	rootCmd.SetErr(stderr)
+
+	if err := rootCmd.Execute(); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	return 0
+}
+
+func newRootCommand(state *cliState) *cobra.Command {
+	rootCmd := &cobra.Command{
 		Use:     "proxer",
 		Short:   "Project Indexer - Local codebase retriever and editor for AI Agents",
 		Version: config.Version,
-		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			rootFlag, err := cmd.Flags().GetString("root")
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Failed to read the root flag: %v\n", err)
-				os.Exit(1)
+				return fmt.Errorf("failed to read the root flag: %w", err)
 			}
 
-			root, err = config.ResolveRoot(rootFlag)
+			state.root, err = config.ResolveRoot(rootFlag)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Failed to resolve the project root: %v\n", err)
-				os.Exit(1)
+				return fmt.Errorf("failed to resolve the project root: %w", err)
 			}
 
-			ignoredDirs, err = config.LoadIgnoredDirs(root)
+			state.ignoredDirs, err = config.LoadIgnoredDirs(state.root)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Failed to load the project config: %v\n", err)
-				os.Exit(1)
+				return fmt.Errorf("failed to load the project config: %w", err)
 			}
 
 			if cmd.Annotations[manageDBAnnotation] == "true" {
-				return
+				return nil
 			}
 
-			db, err = database.Open(filepath.Join(root, config.DBFile), indexer.Chunking())
+			state.db, err = database.Open(filepath.Join(state.root, config.DBFile), indexer.Chunking())
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Failed to initialize DB: %v\n", err)
-				os.Exit(1)
+				return fmt.Errorf("failed to initialize DB: %w", err)
 			}
-		},
-		PersistentPostRun: func(cmd *cobra.Command, args []string) {
-			if db != nil {
-				db.Close()
-			}
+			return nil
 		},
 	}
 	rootCmd.PersistentFlags().String("root", "", "Project root to index and search (default: $"+config.RootEnvVar+", then the current directory)")
 
-	var indexCmd = &cobra.Command{
+	indexCmd := &cobra.Command{
 		Use:   "index",
 		Short: "Scan and index the local directory",
-		Run: func(cmd *cobra.Command, args []string) {
-			refreshed, err := indexer.IndexProject(db, root, ignoredDirs)
+		RunE: func(cmd *cobra.Command, args []string) error {
+			refreshed, err := indexer.IndexProject(state.db, state.root, state.ignoredDirs)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Indexing failed: %v\n", err)
-				os.Exit(1)
+				return fmt.Errorf("indexing failed: %w", err)
 			}
-			fmt.Printf(
-				`{"status": "indexed_successfully", "refreshed": {"added": %d, "changed": %d, "removed": %d, "skipped": %d}}`+"\n",
-				refreshed.Added, refreshed.Changed, refreshed.Removed, refreshed.Skipped,
-			)
+			return writeJSON(cmd.OutOrStdout(), domain.IndexResponse{
+				Status: "indexed_successfully",
+				Refreshed: domain.RefreshSummary{
+					Added:   refreshed.Added,
+					Changed: refreshed.Changed,
+					Removed: refreshed.Removed,
+					Skipped: refreshed.Skipped,
+				},
+			})
 		},
 	}
 
@@ -83,26 +107,24 @@ func main() {
 	var limit int
 	var kind string
 	var noRefresh bool
-	var searchCmd = &cobra.Command{
+	searchCmd := &cobra.Command{
 		Use:   "search",
 		Short: "Search codebase using keyword",
-		Run: func(cmd *cobra.Command, args []string) {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			if keyword == "" {
-				fmt.Fprintln(os.Stderr, "Search keyword cannot be empty")
-				os.Exit(1)
+				return errors.New("search keyword cannot be empty")
 			}
 
-			result, err := tools.PerformSearch(db, root, keyword, tools.SearchOptions{
+			result, err := tools.PerformSearch(state.db, state.root, keyword, tools.SearchOptions{
 				NoRefresh:   noRefresh || config.RefreshDisabled(),
-				IgnoredDirs: ignoredDirs,
+				IgnoredDirs: state.ignoredDirs,
 				Limit:       limit,
 				Kind:        kind,
 			})
 			if err != nil {
-				fmt.Fprintln(os.Stderr, err.Error())
-				os.Exit(1)
+				return err
 			}
-			printJSON(result)
+			return writeJSON(cmd.OutOrStdout(), result)
 		},
 	}
 	searchCmd.Flags().StringVarP(&keyword, "keyword", "k", "", "Keyword for FTS5 search (required)")
@@ -113,21 +135,19 @@ func main() {
 
 	var filepathFlag string
 	var startLine, endLine int
-	var readCmd = &cobra.Command{
+	readCmd := &cobra.Command{
 		Use:   "read",
 		Short: "Read specific lines from a file",
-		Run: func(cmd *cobra.Command, args []string) {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			if filepathFlag == "" {
-				fmt.Fprintln(os.Stderr, "Filepath cannot be empty")
-				os.Exit(1)
+				return errors.New("filepath cannot be empty")
 			}
 
-			result, err := tools.PerformRead(root, filepathFlag, startLine, endLine)
+			result, err := tools.PerformRead(state.root, filepathFlag, startLine, endLine)
 			if err != nil {
-				fmt.Fprintln(os.Stderr, err.Error())
-				os.Exit(1)
+				return err
 			}
-			printJSON(result)
+			return writeJSON(cmd.OutOrStdout(), result)
 		},
 	}
 	readCmd.Flags().StringVarP(&filepathFlag, "filepath", "f", "", "Path to the file (required)")
@@ -138,26 +158,23 @@ func main() {
 	var editFilepath string
 	var editStart, editEnd int
 	var editHash string
-	var editCmd = &cobra.Command{
+	editCmd := &cobra.Command{
 		Use:   "edit",
 		Short: "Replace specific lines in a file with new content from STDIN",
-		Run: func(cmd *cobra.Command, args []string) {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			if editFilepath == "" {
-				fmt.Fprintln(os.Stderr, "Filepath cannot be empty")
-				os.Exit(1)
+				return errors.New("filepath cannot be empty")
 			}
-			newContentBytes, err := io.ReadAll(os.Stdin)
+			newContentBytes, err := io.ReadAll(cmd.InOrStdin())
 			if err != nil {
-				fmt.Fprintln(os.Stderr, "Failed to read new content from stdin")
-				os.Exit(1)
+				return fmt.Errorf("failed to read new content from stdin: %w", err)
 			}
 
-			result, err := tools.PerformEdit(db, root, editFilepath, editStart, editEnd, string(newContentBytes), editHash, ignoredDirs)
+			result, err := tools.PerformEdit(state.db, state.root, editFilepath, editStart, editEnd, string(newContentBytes), editHash, state.ignoredDirs)
 			if err != nil {
-				fmt.Fprintln(os.Stderr, err.Error())
-				os.Exit(1)
+				return err
 			}
-			printJSON(result)
+			return writeJSON(cmd.OutOrStdout(), result)
 		},
 	}
 	editCmd.Flags().StringVarP(&editFilepath, "filepath", "f", "", "Path to file")
@@ -166,21 +183,18 @@ func main() {
 	editCmd.MarkFlagRequired("filepath")
 	editCmd.Flags().StringVar(&editHash, "hash", "", "Hash returned by read; the edit is rejected if the file changed since then")
 
-	rootCmd.AddCommand(indexCmd, searchCmd, readCmd, editCmd, newMCPCommand())
-
+	rootCmd.AddCommand(indexCmd, searchCmd, readCmd, editCmd, newMCPCommand(state))
 	rootCmd.SilenceUsage = true
 	rootCmd.SilenceErrors = true
-	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintf(os.Stderr, "CLI execution error: %v\n", err)
-		os.Exit(1)
-	}
+
+	return rootCmd
 }
 
-func printJSON(v any) {
+func writeJSON(w io.Writer, v any) error {
 	out, err := tools.EncodeJSON(v)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to marshal JSON: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to marshal JSON: %w", err)
 	}
-	fmt.Println(out)
+	_, err = fmt.Fprintln(w, out)
+	return err
 }
