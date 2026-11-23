@@ -1,11 +1,14 @@
 package tools
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/synt4xer/proxer/internal/config"
 	"github.com/synt4xer/proxer/internal/domain"
+	"github.com/synt4xer/proxer/internal/filesystem"
 )
 
 func TestClassifyPath(t *testing.T) {
@@ -126,4 +129,21 @@ func paths(results []domain.SearchResultDB) []string {
 		out = append(out, result.Filepath)
 	}
 	return out
+}
+
+func TestDocsExtensionsRoundTrip(t *testing.T) {
+	docCount := 0
+	for ext, kind := range config.AllowedExtensions {
+		if kind != config.KindDocs {
+			continue
+		}
+		docCount++
+		sample := "docs/sample" + ext
+		ok, reason := filesystem.IsIndexableFileName("sample"+ext, false)
+		assert.True(t, ok, "doc extension %s must be indexable", ext)
+		assert.Equal(t, filesystem.SkipNone, reason)
+		assert.Equal(t, kindDocs, classifyPath(sample), "doc extension %s must classify as kindDocs", ext)
+		assert.Contains(t, docsPathMatch, "filepath:"+strings.TrimPrefix(ext, "."), "docsPathMatch must include %s", ext)
+	}
+	assert.Equal(t, 4, docCount, "expected .md, .mdx, .txt, .rst in KindDocs")
 }

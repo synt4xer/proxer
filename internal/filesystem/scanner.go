@@ -4,7 +4,6 @@ import (
 	"io/fs"
 	"path"
 	"path/filepath"
-	"slices"
 	"strings"
 
 	"github.com/synt4xer/proxer/internal/config"
@@ -22,9 +21,6 @@ const (
 )
 
 var (
-	allowedExtensions = toSet(config.AllowedExtensions)
-	allowedExactNames = toSet(config.AllowedExactNames)
-
 	safeEnvTemplates = map[string]struct{}{
 		".env.example":  {},
 		".env.sample":   {},
@@ -57,16 +53,25 @@ var (
 	}
 )
 
-func toSet(items []string) map[string]struct{} {
-	set := make(map[string]struct{}, len(items))
-	for _, item := range items {
-		set[item] = struct{}{}
-	}
-	return set
+func hasGlobMeta(pattern string) bool {
+	return strings.ContainsAny(pattern, "*?[")
 }
 
+// IsIgnoredDirName reports whether a single directory base name matches any
+// entry in ignoredDirs (exact string equality or path.Match glob such as
+// "*.egg-info").
 func IsIgnoredDirName(name string, ignoredDirs []string) bool {
-	return slices.Contains(ignoredDirs, name)
+	for _, pattern := range ignoredDirs {
+		if pattern == name {
+			return true
+		}
+		if hasGlobMeta(pattern) {
+			if matched, err := path.Match(pattern, name); err == nil && matched {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // PathHasIgnoredDir reports whether any directory segment of a root-relative
@@ -148,7 +153,7 @@ func IsIndexableFileName(baseName string, indexSensitive bool) (bool, SkipReason
 		return false, SkipSensitive
 	}
 
-	if _, ok := allowedExactNames[baseName]; ok {
+	if _, ok := config.AllowedExactNames[baseName]; ok {
 		return true, SkipNone
 	}
 	if indexSensitive && sensitive {
@@ -157,7 +162,7 @@ func IsIndexableFileName(baseName string, indexSensitive bool) (bool, SkipReason
 
 	ext := strings.ToLower(filepath.Ext(baseName))
 	if ext != "" {
-		if _, ok := allowedExtensions[ext]; ok {
+		if _, ok := config.AllowedExtensions[ext]; ok {
 			return true, SkipNone
 		}
 	}

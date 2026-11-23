@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -76,17 +77,33 @@ func expandHome(path string) string {
 	return filepath.Join(home, path[2:])
 }
 
-// DefaultIgnoredDirs is the built-in skip list. A project extends it through
-// ConfigFile; the defaults always stay in force so an unconfigured project
-// cannot accidentally index node_modules or a build directory.
+// DefaultIgnoredDirs is the built-in skip list of unambiguous tool and cache
+// directories. Generic names (build, out, target, deps, dist, bin, obj,
+// .github, env) are intentionally excluded and handled via .gitignore or
+// .proxer.json. Glob patterns like *.egg-info are matched via path.Match.
 var DefaultIgnoredDirs = []string{
-	".git", ".vscode", ".idea", ".github",
-	".agents",
-	"node_modules", "vendor",
-	"dist", "build", "out", "target",
-	"bin", "obj", "tmp", "coverage",
-	".next", ".nuxt", ".svelte-kit",
-	".astro",
+	// VCS & editors
+	".git", ".agents", ".vscode", ".idea",
+	// JS / Web
+	"node_modules", ".next", ".nuxt", ".svelte-kit", ".astro", ".turbo", ".parcel-cache", ".yarn", "bower_components",
+	// Go / PHP / Ruby deps
+	"vendor", ".bundle",
+	// Python
+	".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox", ".nox", ".ipynb_checkpoints", "*.egg-info", "site-packages",
+	// JVM / Kotlin / Android
+	".gradle", ".kotlin", ".mvn",
+	// Apple
+	"Pods", "DerivedData", ".build", ".swiftpm",
+	// Dart / Flutter
+	".dart_tool", ".pub-cache",
+	// Elixir / Erlang
+	"_build", ".elixir_ls",
+	// Haskell / OCaml
+	".stack-work", "dist-newstyle", "_opam",
+	// Infra
+	".terraform", ".terragrunt-cache", ".serverless", ".aws-sam",
+	// Generic caches
+	".cache", ".direnv", "coverage", "tmp",
 }
 
 // NoRefreshEnvVar names the environment variable that keeps `search` read-only.
@@ -160,8 +177,9 @@ func LoadIgnoredDirs(root string) ([]string, error) {
 }
 
 // validateIgnoredDir rejects entries that can never match. Directories are
-// matched by base name at any depth, so an entry with a path separator would
-// silently never apply, which is worse than refusing to start.
+// matched by base name (or base-name glob) at any depth, so an entry with a
+// path separator or invalid glob syntax fails fast instead of silently never
+// applying.
 func validateIgnoredDir(dir string) error {
 	if dir == "" {
 		return fmt.Errorf("ignored_dirs must not contain an empty name")
@@ -169,17 +187,113 @@ func validateIgnoredDir(dir string) error {
 	if dir == "." || dir == ".." || strings.ContainsAny(dir, `/\`) {
 		return fmt.Errorf("ignored_dirs entry %q must be a single directory name, not a path", dir)
 	}
+	if _, err := path.Match(dir, ""); err != nil {
+		return fmt.Errorf("ignored_dirs entry %q has invalid glob pattern: %w", dir, err)
+	}
 	return nil
 }
 
-var AllowedExtensions = []string{
-	".go", ".rb", ".py", ".php", ".rs", ".java", ".c", ".cpp", ".cs",
-	".js", ".jsx", ".ts", ".tsx", ".vue", ".svelte", ".astro",
-	".html", ".css", ".scss", ".sass", ".less",
-	".md", ".json", ".yaml", ".yml", ".toml", ".ini",
-	".sql", ".sh", ".bash",
+// FileKind classifies an indexable file in the authoritative extension and
+// exact-name registries shared by the filesystem scanner and search ranking.
+type FileKind int
+
+const (
+	KindCode FileKind = iota
+	KindDocs
+)
+
+// AllowedExtensions is the single authoritative mapping from lowercase file
+// extension to FileKind. Both filesystem indexing and tools kind classification
+// read from this map so they cannot drift.
+var AllowedExtensions = map[string]FileKind{
+	// Code & config
+	".go":      KindCode,
+	".rb":      KindCode,
+	".py":      KindCode,
+	".pyi":     KindCode,
+	".ipynb":   KindCode,
+	".php":     KindCode,
+	".rs":      KindCode,
+	".java":    KindCode,
+	".kt":      KindCode,
+	".kts":     KindCode,
+	".scala":   KindCode,
+	".clj":     KindCode,
+	".c":       KindCode,
+	".cc":      KindCode,
+	".cpp":     KindCode,
+	".h":       KindCode,
+	".hh":      KindCode,
+	".hpp":     KindCode,
+	".m":       KindCode,
+	".mm":      KindCode,
+	".cs":      KindCode,
+	".fs":      KindCode,
+	".swift":   KindCode,
+	".dart":    KindCode,
+	".lua":     KindCode,
+	".ex":      KindCode,
+	".exs":     KindCode,
+	".erl":     KindCode,
+	".zig":     KindCode,
+	".js":      KindCode,
+	".jsx":     KindCode,
+	".mjs":     KindCode,
+	".cjs":     KindCode,
+	".ts":      KindCode,
+	".tsx":     KindCode,
+	".mts":     KindCode,
+	".cts":     KindCode,
+	".vue":     KindCode,
+	".svelte":  KindCode,
+	".astro":   KindCode,
+	".html":    KindCode,
+	".css":     KindCode,
+	".scss":    KindCode,
+	".sass":    KindCode,
+	".less":    KindCode,
+	".xml":     KindCode,
+	".json":    KindCode,
+	".yaml":    KindCode,
+	".yml":     KindCode,
+	".toml":    KindCode,
+	".ini":     KindCode,
+	".sql":     KindCode,
+	".sh":      KindCode,
+	".bash":    KindCode,
+	".proto":   KindCode,
+	".graphql": KindCode,
+	".gql":     KindCode,
+	".gradle":  KindCode,
+	".tf":      KindCode,
+	".tfvars":  KindCode,
+	".hcl":     KindCode,
+
+	// Docs
+	".md":  KindDocs,
+	".mdx": KindDocs,
+	".txt": KindDocs,
+	".rst": KindDocs,
 }
 
-var AllowedExactNames = []string{
-	"Dockerfile", "Makefile", "docker-compose.yml", "Gemfile", "package.json", "go.mod", "go.sum",
+// AllowedExactNames is the single authoritative mapping from exact base
+// filename to FileKind. Safe .env templates live here because filepath.Ext
+// returns ".example"/".sample"/".template", which are not in AllowedExtensions.
+var AllowedExactNames = map[string]FileKind{
+	"Dockerfile":          KindCode,
+	"Makefile":            KindCode,
+	"Gemfile":             KindCode,
+	"Rakefile":            KindCode,
+	"Podfile":             KindCode,
+	"Jenkinsfile":         KindCode,
+	"BUILD":               KindCode,
+	"WORKSPACE":           KindCode,
+	"docker-compose.yml":  KindCode,
+	"docker-compose.yaml": KindCode,
+	"package.json":        KindCode,
+	"go.mod":              KindCode,
+	"go.sum":              KindCode,
+	".env.example":        KindCode,
+	".env.sample":         KindCode,
+	".env.template":       KindCode,
 }
