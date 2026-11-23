@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/synt4xer/proxer/database"
 	"github.com/synt4xer/proxer/internal/config"
+	"github.com/synt4xer/proxer/internal/domain"
 	"github.com/synt4xer/proxer/internal/indexer"
 )
 
@@ -303,7 +304,10 @@ func TestDeltaBuildSkipsLongLineFiles(t *testing.T) {
 
 	t.Run("reports file as skipped rather than added/indexed", func(t *testing.T) {
 		refreshed := mustIndex(t, db, root, ignored)
-		assert.Equal(t, indexer.Refreshed{Skipped: 1}, refreshed)
+		assert.Equal(t, indexer.Refreshed{
+			Skipped:         1,
+			SkippedByReason: &domain.SkippedCounts{Minified: 1},
+		}, refreshed)
 		assert.Empty(t, chunkRowIDs(t, db, "bundle.min.js"), "skipped files must have no chunk rows")
 		assert.Zero(t, countChunks(t, db, "bundle.min.js"))
 
@@ -331,7 +335,10 @@ func TestDeltaBuildSkipsLongLineFiles(t *testing.T) {
 		touch(t, filepath.Join(root, "bundle.min.js"))
 
 		refreshed := mustIndex(t, db, root, ignored)
-		assert.Equal(t, indexer.Refreshed{Skipped: 1}, refreshed)
+		assert.Equal(t, indexer.Refreshed{
+			Skipped:         1,
+			SkippedByReason: &domain.SkippedCounts{Minified: 1},
+		}, refreshed)
 		assert.Empty(t, chunkRowIDs(t, db, "bundle.min.js"), "chunks must be dropped when file becomes minified")
 	})
 }

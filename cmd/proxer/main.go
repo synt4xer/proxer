@@ -104,13 +104,8 @@ func newRootCommand(state *cliState) *cobra.Command {
 				return fmt.Errorf("indexing succeeded, but disk scrub failed: %w", err)
 			}
 			return writeJSON(cmd.OutOrStdout(), domain.IndexResponse{
-				Status: "indexed_successfully",
-				Refreshed: domain.RefreshSummary{
-					Added:   refreshed.Added,
-					Changed: refreshed.Changed,
-					Removed: refreshed.Removed,
-					Skipped: refreshed.Skipped,
-				},
+				Status:         "indexed_successfully",
+				Refreshed:      refreshed.ToSummary(),
 				IndexSensitive: state.cfg.IndexSensitive,
 				PurgePending:   scrub.PurgePending,
 				Warning:        scrub.Warning,

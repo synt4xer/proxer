@@ -39,6 +39,43 @@ func TestIndexResponseJSONContract(t *testing.T) {
 	assert.Equal(t, in, out)
 }
 
+func TestRefreshSummaryWithSkippedBreakdownAndIgnoredDirs(t *testing.T) {
+	in := domain.IndexResponse{
+		Status: "indexed_successfully",
+		Refreshed: domain.RefreshSummary{
+			Added:       12,
+			Changed:     1,
+			Removed:     0,
+			Skipped:     48,
+			IgnoredDirs: 5,
+			SkippedByReason: &domain.SkippedCounts{
+				IgnoredFiles: 30,
+				Extension:    14,
+				Sensitive:    2,
+				Minified:     1,
+				Size:         1,
+			},
+		},
+	}
+
+	raw, err := tools.EncodeJSON(in)
+	require.NoError(t, err)
+
+	var obj map[string]any
+	require.NoError(t, json.Unmarshal([]byte(raw), &obj))
+	refreshed, ok := obj["refreshed"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, []string{"added", "changed", "ignored_dirs", "removed", "skipped", "skipped_by_reason"}, sortedKeys(refreshed))
+
+	reasons, ok := refreshed["skipped_by_reason"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, []string{"extension", "ignored_files", "minified", "sensitive", "size"}, sortedKeys(reasons))
+
+	var out domain.IndexResponse
+	require.NoError(t, json.Unmarshal([]byte(raw), &out))
+	assert.Equal(t, in, out)
+}
+
 func TestSearchResponseJSONContractAndOmitEmpty(t *testing.T) {
 	t.Run("with refreshed and indexed_at", func(t *testing.T) {
 		in := domain.SearchResponse{
