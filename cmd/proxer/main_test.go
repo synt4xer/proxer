@@ -330,6 +330,46 @@ func TestCLIReadOnReadOnlyRootWithoutDB(t *testing.T) {
 	assert.True(t, os.IsNotExist(err), "proxer read must not create .proxer.db")
 }
 
+func TestCLIReadInHarnessModeDoesNotTouchSkillDir(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "hello.go"), []byte("package main\nfunc Hello() {}\n"), 0o644))
+
+	skillDir := t.TempDir()
+	t.Setenv(config.SkillDirEnvVar, skillDir)
+
+	code, stdout, stderr := runCLI([]string{"--root", root, "read", "-f", "hello.go", "-s", "1", "-e", "2"}, "")
+	readObj := decodeSingleLineJSON(t, code, stdout, stderr)
+	assert.Equal(t, "hello.go", unmarshalJSON[string](t, readObj["filepath"]))
+
+	_, err := os.Stat(filepath.Join(skillDir, "database"))
+	assert.True(t, os.IsNotExist(err), "proxer read must not create <skillDir>/database")
+
+	if os.Geteuid() == 0 {
+		return
+	}
+	roSkillDir := filepath.Join(t.TempDir(), "ro-skill")
+	require.NoError(t, os.MkdirAll(roSkillDir, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(roSkillDir, 0o700) })
+	t.Setenv(config.SkillDirEnvVar, roSkillDir)
+
+	code, stdout, stderr = runCLI([]string{"--root", root, "read", "-f", "hello.go", "-s", "1", "-e", "2"}, "")
+	readObj = decodeSingleLineJSON(t, code, stdout, stderr)
+	assert.Equal(t, "hello.go", unmarshalJSON[string](t, readObj["filepath"]))
+}
+
+func TestCLISearchPathOnlyHitOmitsLine(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "pathonlymatch.txt"), []byte("unrelated body text\n"), 0o644))
+
+	code, stdout, stderr := runCLI([]string{"--root", root, "search", "-k", "pathonlymatch"}, "")
+	searchObj := decodeSingleLineJSON(t, code, stdout, stderr)
+	results := unmarshalJSON[[]map[string]jsontext.Value](t, searchObj["results"])
+	require.Len(t, results, 1)
+	assert.Equal(t, "path", unmarshalJSON[string](t, results[0]["match"]))
+	_, hasLine := results[0]["line"]
+	assert.False(t, hasLine, "path-only search hit must omit line from CLI JSON")
+}
+
 func TestCLISensitiveExclusionAndOptInToggle(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "config"), 0o755))
@@ -409,7 +449,7 @@ func TestCLISkipBreakdownAndIgnoredDirsGolden(t *testing.T) {
 	assert.Equal(t, 1, unmarshalJSON[int](t, reasons["sensitive"]))
 }
 
-func TestCLIP3ReadNumberedAndAnchorEdit(t *testing.T) {
+func TestCLIReadNumberedAndAnchorEdit(t *testing.T) {
 	root := setupFixtureRoot(t)
 
 	code, stdout, stderr := runCLI([]string{"--root", root, "read", "-f", "main.go", "-s", "1", "-e", "5", "-n"}, "")
