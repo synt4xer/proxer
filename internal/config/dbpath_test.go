@@ -87,3 +87,21 @@ func TestResolveDBPath(t *testing.T) {
 		assert.Equal(t, resolveRealPath(filepath.Join(home, ".agents", "skills", "proxer")), HarnessSkillDir(userHarnessExec))
 	})
 }
+
+func TestDBPathHelpers(t *testing.T) {
+	assert.Equal(t, "root", sanitizeBasename(""))
+	assert.Equal(t, "root", sanitizeBasename("."))
+	assert.Equal(t, "root", sanitizeBasename("/"))
+	assert.Equal(t, "my_app_v1.2", sanitizeBasename("my app@v1.2"))
+
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	assert.Equal(t, home, expandHome("~"))
+	assert.Equal(t, filepath.Join(home, "sub"), expandHome("~/sub"))
+	assert.Equal(t, "/abs/path", expandHome("/abs/path"))
+
+	assert.True(t, isUnderUserHarnessRoot("/cfg/app/skills/proxer", "/home/u", "/cfg"))
+	assert.True(t, isUnderUserHarnessRoot("/home/u/.claude/skills/proxer", "/home/u", "/cfg"))
+	assert.False(t, isUnderUserHarnessRoot("/home/u/work/skills/proxer", "/home/u", "/cfg"))
+	assert.False(t, isUnderUserHarnessRoot("/tmp/skills/proxer", "/home/u", "/cfg"))
+}

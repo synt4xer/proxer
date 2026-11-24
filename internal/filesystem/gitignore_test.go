@@ -3,6 +3,7 @@ package filesystem_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -124,4 +125,22 @@ func TestUnifiedRegistryExtensionsAndExactNames(t *testing.T) {
 	ok, reason := filesystem.IsIndexableFileName("go.sum", false)
 	assert.False(t, ok)
 	assert.Equal(t, filesystem.SkipExtension, reason)
+}
+
+func TestGitignoreTrailingSpacesAndDoubleStarCollapse(t *testing.T) {
+	root := t.TempDir()
+	gitignore := strings.Join([]string{
+		"trailing.log   ",
+		`escaped\ `,
+		"a***b.txt",
+		"",
+	}, "\n")
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".gitignore"), []byte(gitignore), 0o644))
+
+	m := filesystem.NewIgnoreMatcher(root, nil)
+	assert.True(t, m.IsFileIgnored("trailing.log"))
+	assert.True(t, m.IsFileIgnored("escaped "))
+	assert.False(t, m.IsFileIgnored("escaped"))
+	assert.True(t, m.IsFileIgnored("a_mid_b.txt"))
+	assert.False(t, m.IsPathIgnored(".", false))
 }

@@ -55,6 +55,16 @@ func TestIdentifierTails(t *testing.T) {
 			content:  "my_sqlRepo_v2",
 			expected: "repo",
 		},
+		{
+			name:     "unicode identifier extracts and deduplicates tails",
+			content:  "caféHandler caféHandler αβγDelta",
+			expected: "handler delta",
+		},
+		{
+			name:     "long ASCII tail exceeding stack buffer is deduplicated",
+			content:  "getSuperlongidentifiertailnamethatexceedssixtyfourbytesintotallengthnow getSuperlongidentifiertailnamethatexceedssixtyfourbytesintotallengthnow",
+			expected: "superlongidentifiertailnamethatexceedssixtyfourbytesintotallengthnow",
+		},
 	}
 
 	for _, tt := range tests {
@@ -62,4 +72,11 @@ func TestIdentifierTails(t *testing.T) {
 			assert.Equal(t, tt.expected, identifierTails(tt.content))
 		})
 	}
+}
+
+func TestShouldExtractTails(t *testing.T) {
+	assert.True(t, shouldExtractTails("internal/tools/search.go"))
+	assert.True(t, shouldExtractTails("Makefile"))
+	assert.False(t, shouldExtractTails("README.md"))
+	assert.False(t, shouldExtractTails("notes/todo.txt"))
 }
