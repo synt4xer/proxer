@@ -648,9 +648,9 @@ func TestPerformReadLongLines(t *testing.T) {
 	})
 }
 
-func TestPerformSearchPriority2RankingAndSubtokens(t *testing.T) {
+func TestPerformSearchRankingAndSubtokens(t *testing.T) {
 	root := t.TempDir()
-	dbPath := filepath.Join(t.TempDir(), "p2.db")
+	dbPath := filepath.Join(t.TempDir(), "ranking.db")
 	db, err := database.Open(dbPath, database.OpenOptions{Chunking: indexer.Chunking()})
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })

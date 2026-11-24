@@ -66,7 +66,7 @@ func TestSearchBusyContentionAndCancelledCtxRestore(t *testing.T) {
 	assert.Equal(t, database.DefaultBusyTimeoutMS, timeout)
 }
 
-func TestW6ReindexBloatReclaimedByMaintain(t *testing.T) {
+func TestReindexBloatReclaimedByMaintain(t *testing.T) {
 	root := t.TempDir()
 	lines := make([]byte, 0, 4096)
 	lines = append(lines, []byte("package main\n\n")...)

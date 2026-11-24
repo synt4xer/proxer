@@ -85,7 +85,7 @@ func TestDBFilePermissions0600(t *testing.T) {
 }
 
 func TestSensitivePurgeStage1AndStage2(t *testing.T) {
-	const secret = "ULTRA_SECRET_TOKEN_P1A_TEST_987654"
+	const secret = "ULTRA_SECRET_TOKEN_PURGE_TEST_987654"
 	dbPath := filepath.Join(t.TempDir(), ".proxer.db")
 	seedLeakedDB(t, dbPath, secret)
 

@@ -16,11 +16,6 @@ import (
 	"github.com/synt4xer/proxer/internal/indexer"
 )
 
-func openTestDB(t *testing.T, root string) func() {
-	t.Helper()
-	return func() {}
-}
-
 func TestPerformReadNumberedAndByteCap(t *testing.T) {
 	root := t.TempDir()
 	var sb strings.Builder
@@ -99,13 +94,17 @@ func TestSearchHitLineSnippetHashAndDirectAnchorEdit(t *testing.T) {
 	assert.NotEmpty(t, editRes.Hash)
 	assert.NotEqual(t, hit.Hash, editRes.Hash)
 
-	// Path-only hit: line must be 0 (omitted) and snippet must have no <b> tags.
+	// Path-only hit: line must be 0 and omitted from JSON, and snippet must have no <b> tags.
 	pathRes, err := PerformSearch(db, root, "notesonly", SearchOptions{IgnoredDirs: config.DefaultIgnoredDirs})
 	require.NoError(t, err)
 	require.Len(t, pathRes.Results, 1)
 	assert.Equal(t, "path", pathRes.Results[0].Match)
 	assert.Equal(t, 0, pathRes.Results[0].Line)
 	assert.NotContains(t, pathRes.Results[0].Snippet, "<b>")
+
+	encodedPathRes, err := EncodeJSON(pathRes)
+	require.NoError(t, err)
+	assert.NotContains(t, encodedPathRes, `"line":`)
 }
 
 func TestPerformEditAnchorModeAndChainedHash(t *testing.T) {
@@ -138,6 +137,31 @@ func TestPerformEditAnchorModeAndChainedHash(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "old content matched 2 locations in dup.go at lines [4, 8]")
+
+	// Out-of-range occurrence is rejected.
+	_, err = PerformEditWithOptions(context.Background(), db, root, "dup.go", 0, 0, "return 2", "", EditOptions{
+		OldContent: "return 1",
+		Occurrence: 3,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "occurrence 3 out of range")
+
+	// Replacement containing TruncationMarker is rejected in anchor mode.
+	_, err = PerformEditWithOptions(context.Background(), db, root, "dup.go", 0, 0, "return 2"+config.TruncationMarker, "", EditOptions{
+		OldContent: "return 1",
+		Occurrence: 1,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "truncation marker")
+
+	// Anchor edit targeting a line exceeding MaxLineWidth is rejected.
+	longLine := "const longVal = \"" + strings.Repeat("x", config.MaxLineWidth+10) + "\"\n"
+	require.NoError(t, os.WriteFile(filepath.Join(root, "long.go"), []byte("package main\n"+longLine), 0o644))
+	_, err = PerformEditWithOptions(context.Background(), db, root, "long.go", 0, 0, "const longVal = \"ok\"", "", EditOptions{
+		OldContent: "const longVal",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exceeds")
 
 	// Disambiguate with occurrence == 2, then chain another edit using returned hash.
 	res1, err := PerformEditWithOptions(context.Background(), db, root, "dup.go", 0, 0, "return 2", "", EditOptions{

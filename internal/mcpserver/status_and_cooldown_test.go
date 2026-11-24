@@ -89,3 +89,15 @@ func TestMCPIndexWithDBPathAndReadOnlyStatusVacuumError(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, res.IsError)
 }
+
+func TestMCPNoRefreshEnvSkipsInitialRefresh(t *testing.T) {
+	t.Setenv(config.NoRefreshEnvVar, "1")
+	cs, _ := newTestSession(t)
+
+	_ = callTool(t, cs, "index", map[string]any{})
+	var resp domain.SearchResponse
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, callTool(t, cs, "search", map[string]any{"keyword": "ProcessData"}))), &resp))
+	assert.Nil(t, resp.Refreshed, "PROXER_NO_REFRESH=1 must skip pre-search refresh")
+	assert.False(t, resp.Stale)
+	require.Len(t, resp.Results, 1)
+}

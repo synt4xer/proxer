@@ -1,7 +1,6 @@
 package indexer_test
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,7 +11,7 @@ import (
 	"github.com/synt4xer/proxer/internal/indexer"
 )
 
-func indexedFilepaths(t *testing.T, dbPathRoot string, db interface {
+func indexedFilepaths(t *testing.T, db interface {
 	Select(dest any, query string, args ...any) error
 }) []string {
 	t.Helper()
@@ -56,7 +55,7 @@ func TestEcosystemDefaultsWithoutGitignore(t *testing.T) {
 	assert.Equal(t, 0, refreshed.Skipped, "pruned directory roots must never be mixed into skipped files")
 	assert.Nil(t, refreshed.SkippedByReason)
 
-	got := indexedFilepaths(t, root, db)
+	got := indexedFilepaths(t, db)
 	assert.Equal(t, []string{
 		".github/workflows/ci.yml",
 		"Main.swift",
@@ -110,13 +109,13 @@ func TestGitignoreAndProxerConfigPrecedence(t *testing.T) {
 	assert.Equal(t, 2, refreshed.SkippedByReason.Extension)
 	assert.Equal(t, 5, refreshed.Skipped)
 
-	got := indexedFilepaths(t, root, db)
+	got := indexedFilepaths(t, db)
 	assert.Equal(t, []string{".proxer.json", "main.go", "pkg/keep.py"}, got)
 
 	// Single-file ReindexFile must honor .gitignore and never smuggle ignored files into SQLite.
 	require.NoError(t, indexer.ReindexFile(db, root, filepath.Join(root, "pkg", "drop.py"), cfg.IgnoredDirs))
 	require.NoError(t, indexer.ReindexFile(db, root, filepath.Join(root, "build", "a.go"), cfg.IgnoredDirs))
-	assert.Equal(t, []string{".proxer.json", "main.go", "pkg/keep.py"}, indexedFilepaths(t, root, db))
+	assert.Equal(t, []string{".proxer.json", "main.go", "pkg/keep.py"}, indexedFilepaths(t, db))
 }
 
 func TestSkippedBreakdownUnitInvariant(t *testing.T) {
@@ -175,5 +174,4 @@ func TestSkippedBreakdownUnitInvariant(t *testing.T) {
 	assert.Equal(t, 2, refreshedAgain.SkippedByReason.Extension, "internal .proxer.db* files must not inflate skipped_by_reason.extension")
 	// Note: bundle.min.js is recorded in manifest so it is not re-read on second walk.
 	assert.Equal(t, 6, refreshedAgain.Skipped)
-	_ = os.ErrNotExist
 }
