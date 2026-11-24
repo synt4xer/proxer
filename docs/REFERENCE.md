@@ -33,7 +33,7 @@ Point `DEST` to the root of the project where your agent works:
 make install DEST=/path/to/my-awesome-project
 ```
 
-This installs the skill package as a single unit and appends `.proxer.db*` to `$(DEST)/.gitignore` if not already present:
+This installs the skill package as a single unit without modifying `.gitignore` or project config files (add `.proxer.db*` to `.gitignore` or `.git/info/exclude` yourself if desired):
 
 ```
 /path/to/my-awesome-project/.agents/skills/proxer/
@@ -176,3 +176,15 @@ docs/                Documentation and integration guides
 - **Line-range edits only:** Creating or deleting files is out of scope; `edit` replaces existing line ranges.
 - **Concurrent writers:** Simultaneous edits do not merge; always pass `--hash` from `read` to prevent silent overwrites.
 - **Not a semantic analyzer:** Proxer locates and edits text; pair it with a language server (`gopls`, `tsserver`, `rust-analyzer`) for type resolution and call-graph navigation.
+
+## Release Gate Checklist
+
+Every release tag (`v*`, enforced by `.github/workflows/ci.yml` from `v0.7.0` onward) must pass:
+
+1. **Formatting:** `test -z "$(gofmt -l .)"`
+2. **Static analysis:** `go vet ./...`
+3. **Pure-Go build:** `CGO_ENABLED=0 go build ./...`
+4. **Tests:** `CGO_ENABLED=0 go test ./...` and `go test -race ./...`
+5. **Benchmarks:** Re-measure rare + common-term search (`func`, `if`, `context value`) and no-op refresh on a fresh binary and fresh `.proxer.db` using the recipe in [BENCHMARKS.md](BENCHMARKS.md) §5, and stamp date, commit/tag, OS/CPU, and `modernc.org/sqlite` version.
+6. **Harness verification:** Update the verification table in [INTEGRATION.md](INTEGRATION.md) with the release date and verified surfaces.
+7. **Version & release notes:** Bump `config.Version` (`internal/config/config.go`) per semver (feature = MINOR, fix = PATCH, docs-only = no tag) and publish release notes on the git release tag / GitHub Release (no committed `CHANGELOG.md`).

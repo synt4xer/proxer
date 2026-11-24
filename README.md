@@ -10,18 +10,32 @@ Single static binary (CGO-free SQLite FTS5) · CLI, [Agent Skill](https://agents
 
 Shell tools like `rg`, `grep`, `sed`, and ad-hoc `python3` scripts are built for human terminals, not LLM prompt budgets. In an agent loop, they either flood the context window with megabytes of unranked lines or return `0 hits` on natural multi-word and `camelCase` queries.
 
-Measured on an **8,000-file (68 MB)** mixed repository (Go source, tests, Markdown docs, and a 144 KB single-line minified JS bundle):
+Measured `[CLI end-to-end]` on the reproducible **8,000-file / 72,000-chunk Go fixture** (`2026-11-24`, commit `7303375`, `macOS arm64 (Apple M1)`, `CGO_ENABLED=0`, `modernc.org/sqlite v1.62.0`, median of 7 runs; mixed-tree payload comparisons from [docs/BENCHMARKS.md](docs/BENCHMARKS.md)):
 
-| Agent Operation | `proxer` | `rg` / `grep -rn` | `sed` / `python3` script |
+| Agent Operation (`[CLI end-to-end]`) | `proxer` | `rg` / `grep -rn` | `sed` / `python3` script |
 | --- | --- | --- | --- |
-| **Broad search** (`func`) | **1.0–1.5 KB** (top 5 code files, 55–82 ms) | **18.4–29.2 MB** / ~241k lines (`rg` 220 ms, `grep` 2.7 s) | — |
-| **Multi-term query** (`AuthMiddleware session`) | **1.6 KB** (`AND`-first → ranks target #1, 20–95 ms) | **0 hits** (treats query as literal adjacent phrase) | — |
-| **`camelCase` sub-token** (`middleware` → `AuthMiddleware`) | **1.5 KB** (matches sub-token tails, skips bundle, 15–100 ms) | **0 hits** (default) or **256 KB** (`-i` dumps minified JS line) | — |
-| **Rare symbol** (`verifySignatureToken7722`, 1 hit) | **479–539 B** (60-line chunk context, 14–72 ms) | **71–74 B** (1 line only; `rg` 133 ms, `grep` 792 ms) | **74 B** (`python3` walk: 659 ms) |
-| **Read slice** on a 144 KB single-line file (lines 1–5) | **4.4 KB** in **12 ms** (4,096-char cap + SHA-256 `hash`) | — | **144.1 KB** (`sed` 4 ms, `python3` 28 ms; no hash) |
+| **Rare symbol** (`verifySignatureToken7722`, 1 chunk / ≤50, 1 occ.) | **479–539 B** · **10.3 / 50.3 ms** (`--no-refresh` / refreshed) | **71–74 B** (`rg` 133 ms, `grep` 792 ms) | **74 B** (`python3` walk: 659 ms) |
+| **Common term** (`func`, 72k chunks · 656k occ., 9.1/chunk) | **1.0–1.5 KB** (top 5 code files) · **100.9 / 141.1 ms** | **18.4–29.2 MB** / ~241k lines (`rg` 220 ms, `grep` 2.7 s) | — |
+| **Common term** (`if`, 72k chunks · 656k occ., 9.1/chunk) | **1.0–1.5 KB** (top 5 code files) · **101.4 / 141.1 ms** | Unbounded line flood | — |
+| **Common multi-term** (`context value`, 72k chunks · 1.32M + 2.62M occ., 18.3 + 36.4/chunk) | **1.5–1.8 KB** (`AND`-first) · **361.1 / 402.3 ms** | **0 hits** (literal phrase) | — |
+| **Multi-term / `camelCase`** (`AuthMiddleware session`, `middleware` → `AuthMiddleware`) | **1.5–1.6 KB** (sub-token tails, skips minified bundles) | **0 hits** (default) or **256 KB** (`-i` dumps minified JS) | — |
+| **Read slice** on a 144 KB single-line file (lines 1–5) | **4.4 KB** in **11.8 ms** (4,096-char line cap + 64 KB total cap + SHA-256 `hash`) | — | **144.1 KB** (`sed` 4 ms, `python3` 28 ms; no hash) |
 | **Edit line range** (`--hash` guard + index update) | **15–19 ms** (verifies SHA-256 + reindexes edited file) | — | **5 ms** (`sed -i`, fragile escaping) / **28 ms** (`python3`, blind overwrite) |
 
-> **When raw CLI tools win:** If you already know a rare symbol has <5 hits and only want `file:line`, `rg` or `grep -n` outputs fewer bytes (~71 B vs ~500 B). And for full-regex sweeps across a cold repo, use `rg`. Pair Proxer with a language server (`gopls`, `tsserver`, `rust-analyzer`) for type resolution and call graphs. Full methodology in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
+### Proxer vs. Built-in Harness Tools (`Grep` / `Glob` / `Read`)
+
+Modern coding harnesses ship their own `Grep`, `Glob`, and `Read` tools with output truncation. Proxer is complementary—use each where it wins:
+
+| Scenario | Built-in `Grep` / `Glob` / `Read` | Proxer (`search` / `read` / `edit`) | Winner |
+| --- | --- | --- | --- |
+| **Cold single query on an unindexed repo** | Immediate scan (~130 ms at 8k files); zero index build | Pays initial index build (~4.25 s on 72k dense Go chunks) | **Built-in** |
+| **Full-regex or punctuation-heavy sweep** | Native regex engine across all text | FTS5 token-prefix + `camelCase` tails only (no regex) | **Built-in** |
+| **Small rare-symbol hit (<5 matches)** | Compact `file:line` list (~70–400 B) | ~500 B JSON envelope with 60-line chunk context | **Built-in** |
+| **Warm multi-term / `camelCase` ranked discovery** | Literal/regex only; unranked filesystem order | `AND`-first BM25 + symbol/path/kind ranking (`code` → `test` → `docs`) | **Proxer** |
+| **Token-bounded chunk discovery & capped read** | Arbitrary truncation or full-file dumps | 60-line chunks, 5 files default, 4,096-char line cap & 64 KB read cap with `total`/`truncated`/`next_start` | **Proxer** |
+| **Concurrent-safe targeted edit** | No index update; varies on stale-file guards | Atomic write + whole-file SHA-256 `--hash` guard + instant single-file reindex | **Proxer** |
+
+> Pair Proxer with a language server (`gopls`, `tsserver`, `rust-analyzer`) for type resolution and call graphs. Full fixture recipe, SQL breakdown, and methodology in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
 ## The 3-Step Agent Loop
 
@@ -53,7 +67,7 @@ make build
 make install DEST=/path/to/your-project
 ```
 
-`make install` installs the binary and `SKILL.md` into `<DEST>/.agents/skills/proxer/` and adds `.proxer.db*` to `<DEST>/.gitignore`.
+`make install` installs the binary and `SKILL.md` into `<DEST>/.agents/skills/proxer/` without modifying `.gitignore` or project config files (add `.proxer.db*` to `.gitignore` or `.git/info/exclude` yourself if desired).
 
 ### 2. Optional: Enable MCP Server
 
