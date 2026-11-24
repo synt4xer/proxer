@@ -3,6 +3,7 @@ package tools
 import (
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -199,6 +200,66 @@ func filterKind(candidates []domain.SearchResultDB, kind fileKind) []domain.Sear
 		}
 	}
 	return kept
+}
+
+var (
+	importLineRe = regexp.MustCompile(`^\s*(?:import\b|from\s+\S+\s+import\b|require\(|use\s+|#include\b)`)
+	defLineRe    = regexp.MustCompile(`^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?(?:func|def|class|type|interface|struct|fn|impl|fun|object|protocol|enum|const|let|var)\b`)
+)
+
+const (
+	importDemoteFactor = 0.65
+	defBoostFactor     = 1.35
+)
+
+// applySymbolScoring adjusts negative BM25 scores in-place for code and test
+// chunks so declarations outrank import blocks before per-file deduplication.
+func applySymbolScoring(candidates []domain.SearchResultDB, terms []string) {
+	if len(candidates) == 0 || len(terms) == 0 {
+		return
+	}
+	lowerTerms := make([][]rune, 0, len(terms))
+	for _, t := range terms {
+		if t != "" {
+			lowerTerms = append(lowerTerms, []rune(strings.ToLower(t)))
+		}
+	}
+	if len(lowerTerms) == 0 {
+		return
+	}
+
+	for i := range candidates {
+		k := classifyPath(candidates[i].Filepath)
+		if k != kindCode && k != kindTest {
+			continue
+		}
+		matchedLines := 0
+		importLines := 0
+		hasDef := false
+		for line := range strings.SplitSeq(candidates[i].Content, "\n") {
+			if firstTermRuneIndex(line, lowerTerms) < 0 {
+				continue
+			}
+			matchedLines++
+			if importLineRe.MatchString(line) {
+				importLines++
+			} else if defLineRe.MatchString(line) {
+				hasDef = true
+			}
+		}
+		if matchedLines == 0 {
+			continue
+		}
+		if importLines*2 >= matchedLines {
+			candidates[i].Score *= importDemoteFactor
+		} else if hasDef {
+			candidates[i].Score *= defBoostFactor
+		}
+	}
+
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return candidates[i].Score < candidates[j].Score
+	})
 }
 
 // orderByKind filters and orders candidates using soft BM25 multipliers

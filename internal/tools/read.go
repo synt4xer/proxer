@@ -14,11 +14,22 @@ import (
 	"github.com/synt4xer/proxer/internal/indexer"
 )
 
+type ReadOptions struct {
+	Numbered bool
+}
+
 // PerformRead returns the requested line range of a file. The path is resolved
 // against root but echoed back as given, so agents can chain read and edit
 // calls with the same spelling they already have in context. The hash covers
 // the whole file, so edit can tell whether anything shifted since the read.
 func PerformRead(root, path string, startLine, endLine int) (domain.ReadResultJSON, error) {
+	return PerformReadWithOptions(root, path, startLine, endLine, ReadOptions{})
+}
+
+// PerformReadWithOptions returns the requested line range of a file with
+// optional 1-based line-number prefixes ("N\tline"), enforcing config.MaxReadBytes
+// against the exact formatted bytes written to Content.
+func PerformReadWithOptions(root, path string, startLine, endLine int, opts ReadOptions) (domain.ReadResultJSON, error) {
 	resolved, err := resolvePath(root, path)
 	if err != nil {
 		return domain.ReadResultJSON{}, err
@@ -57,11 +68,15 @@ func PerformRead(root, path string, startLine, endLine int) (domain.ReadResultJS
 			line = strings.TrimSuffix(line, "\n")
 			line = strings.TrimSuffix(line, "\r")
 			truncatedLine := indexer.TruncateLine(line, config.MaxLineWidth)
-			lineLen := len(truncatedLine) + 1
+			formattedLine := truncatedLine
+			if opts.Numbered {
+				formattedLine = fmt.Sprintf("%d\t%s", totalLines, truncatedLine)
+			}
+			lineLen := len(formattedLine) + 1
 			if actualEnd > 0 && contentBuilder.Len()+lineLen > config.MaxReadBytes {
 				budgetExhausted = true
 			} else {
-				contentBuilder.WriteString(truncatedLine)
+				contentBuilder.WriteString(formattedLine)
 				contentBuilder.WriteByte('\n')
 				actualEnd = totalLines
 			}

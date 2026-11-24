@@ -5,7 +5,6 @@ type SearchResultDB struct {
 	StartLine int     `db:"start_line"`
 	EndLine   int     `db:"end_line"`
 	Content   string  `db:"content"`
-	Snippet   string  `db:"snippet"`
 	Score     float64 `db:"score"`
 }
 
@@ -63,9 +62,11 @@ type SearchResponse struct {
 type SearchResultJSON struct {
 	Root     string `json:"root"`
 	Filepath string `json:"filepath"`
-	Line     string `json:"line"`
+	Chunk    string `json:"chunk"`
+	Line     int    `json:"line,omitempty"`
 	Snippet  string `json:"snippet"`
 	Match    string `json:"match"`
+	Hash     string `json:"hash,omitempty"`
 }
 
 type ReadResultJSON struct {
@@ -83,6 +84,7 @@ type ReadResultJSON struct {
 type EditResultJSON struct {
 	Status        string `json:"status" jsonschema:"human-readable result status"`
 	Message       string `json:"message" jsonschema:"details of the edit"`
+	Hash          string `json:"hash,omitempty" jsonschema:"new full-file SHA-256 hash after the edit"`
 	ReindexFailed bool   `json:"reindex_failed,omitempty,omitzero" jsonschema:"true when the file was written to disk but post-write reindexing failed"`
 	ReindexError  string `json:"reindex_error,omitempty" jsonschema:"error returned by post-write reindexing when reindex_failed is true"`
 }

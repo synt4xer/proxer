@@ -159,11 +159,14 @@ func TestCLIGoldenEnvelopes(t *testing.T) {
 	assertJSONSchema(t, firstResult, map[string]jsonType{
 		"root":     jsonString,
 		"filepath": jsonString,
-		"line":     jsonString,
+		"chunk":    jsonString,
+		"line":     jsonInt,
 		"snippet":  jsonString,
 		"match":    jsonString,
+		"hash":     jsonString,
 	})
 	assert.Equal(t, "main.go", unmarshalJSON[string](t, firstResult["filepath"]))
+	assert.Equal(t, 3, unmarshalJSON[int](t, firstResult["line"]))
 
 	code, stdout, stderr = runCLI([]string{"--root", root, "read", "-f", "main.go", "-s", "1", "-e", "5"}, "")
 	readObj := decodeSingleLineJSON(t, code, stdout, stderr)
@@ -194,8 +197,10 @@ func TestCLIGoldenEnvelopes(t *testing.T) {
 	assertJSONSchema(t, editObj, map[string]jsonType{
 		"status":  jsonString,
 		"message": jsonString,
+		"hash":    jsonString,
 	})
 	assert.Equal(t, "success", unmarshalJSON[string](t, editObj["status"]))
+	assert.NotEmpty(t, unmarshalJSON[string](t, editObj["hash"]))
 
 	code, stdout, stderr = runCLI([]string{"--root", root, "search", "-k", "99", "--no-refresh"}, "")
 	afterEditObj := decodeSingleLineJSON(t, code, stdout, stderr)
@@ -401,4 +406,32 @@ func TestCLISkipBreakdownAndIgnoredDirsGolden(t *testing.T) {
 	assert.Equal(t, 1, unmarshalJSON[int](t, reasons["ignored_files"]))
 	assert.Equal(t, 1, unmarshalJSON[int](t, reasons["extension"]))
 	assert.Equal(t, 1, unmarshalJSON[int](t, reasons["sensitive"]))
+}
+
+func TestCLIP3ReadNumberedAndAnchorEdit(t *testing.T) {
+	root := setupFixtureRoot(t)
+
+	code, stdout, stderr := runCLI([]string{"--root", root, "read", "-f", "main.go", "-s", "1", "-e", "5", "-n"}, "")
+	readObj := decodeSingleLineJSON(t, code, stdout, stderr)
+	content := unmarshalJSON[string](t, readObj["content"])
+	assert.Contains(t, content, "1\tpackage main\n")
+	assert.Contains(t, content, "3\tfunc ComputeAnswer() int {\n")
+
+	code, stdout, stderr = runCLI([]string{"--root", root, "search", "-k", "ComputeAnswer"}, "")
+	searchObj := decodeSingleLineJSON(t, code, stdout, stderr)
+	results := unmarshalJSON[[]map[string]jsontext.Value](t, searchObj["results"])
+	require.NotEmpty(t, results)
+	searchHash := unmarshalJSON[string](t, results[0]["hash"])
+	require.NotEmpty(t, searchHash)
+
+	// Reject combining --old and --start/--end.
+	code, stdout, stderr = runCLI([]string{"--root", root, "edit", "-f", "main.go", "--old", "return 42", "-s", "4"}, "return 7")
+	assertCLIError(t, code, stdout, stderr, "cannot combine --old anchor mode with --start/--end line range")
+
+	// Anchor edit directly from search hash.
+	code, stdout, stderr = runCLI([]string{"--root", root, "edit", "-f", "main.go", "--old", "\treturn 42", "--hash", searchHash}, "\treturn 77")
+	editObj := decodeSingleLineJSON(t, code, stdout, stderr)
+	assert.Equal(t, "success", unmarshalJSON[string](t, editObj["status"]))
+	assert.NotEmpty(t, unmarshalJSON[string](t, editObj["hash"]))
+	assert.NotEqual(t, searchHash, unmarshalJSON[string](t, editObj["hash"]))
 }

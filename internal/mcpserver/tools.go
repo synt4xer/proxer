@@ -24,14 +24,17 @@ type readInput struct {
 	Filepath string `json:"filepath" jsonschema:"path to the file, relative to the project root; absolute paths inside the root are accepted and paths outside it are rejected"`
 	Start    int    `json:"start,omitempty" jsonschema:"first line to read, inclusive (default 1)"`
 	End      int    `json:"end,omitempty" jsonschema:"last line to read, inclusive (default 60)"`
+	Numbered bool   `json:"numbered,omitempty" jsonschema:"prefix each returned line with its 1-based line number and a tab (default false)"`
 }
 
 type editInput struct {
-	Filepath string `json:"filepath" jsonschema:"path to the file, relative to the project root; absolute paths inside the root are accepted and paths outside it are rejected"`
-	Start    int    `json:"start" jsonschema:"first line to replace, inclusive"`
-	End      int    `json:"end" jsonschema:"last line to replace, inclusive"`
-	Content  string `json:"content" jsonschema:"replacement text for the line range; it need not have the same number of lines as the range"`
-	Hash     string `json:"hash,omitempty" jsonschema:"hash returned by an earlier read of this file; when set, the edit is rejected if the file changed since that read"`
+	Filepath   string `json:"filepath" jsonschema:"path to the file, relative to the project root; absolute paths inside the root are accepted and paths outside it are rejected"`
+	Start      int    `json:"start,omitempty" jsonschema:"first line to replace, inclusive (line-range mode)"`
+	End        int    `json:"end,omitempty" jsonschema:"last line to replace, inclusive (line-range mode)"`
+	OldContent string `json:"old_content,omitempty" jsonschema:"exact text block to replace (anchor mode; mutually exclusive with start/end)"`
+	Occurrence int    `json:"occurrence,omitempty" jsonschema:"1-based occurrence index when old_content matches multiple times (default 0 requires a unique match)"`
+	Content    string `json:"content" jsonschema:"replacement text for the line range or anchor block"`
+	Hash       string `json:"hash,omitempty" jsonschema:"hash returned by an earlier search or read of this file; when set, the edit is rejected if the file changed since that read"`
 }
 
 func (s *Server) registerTools() {
@@ -149,7 +152,9 @@ func (s *Server) addReadTool() {
 			end = 60
 		}
 
-		result, err := tools.PerformRead(s.root, in.Filepath, start, end)
+		result, err := tools.PerformReadWithOptions(s.root, in.Filepath, start, end, tools.ReadOptions{
+			Numbered: in.Numbered,
+		})
 		if err != nil {
 			return nil, domain.ReadResultJSON{}, err
 		}
@@ -169,6 +174,9 @@ func (s *Server) addEditTool() {
 		result, err := tools.PerformEditWithOptions(ctx, s.db, s.root, in.Filepath, in.Start, in.End, in.Content, in.Hash, tools.EditOptions{
 			IgnoredDirs:    s.ignoredDirs,
 			IndexSensitive: s.indexSensitive,
+			OldContent:     in.OldContent,
+			Occurrence:     in.Occurrence,
+			HasRange:       in.Start != 0 || in.End != 0,
 		})
 		if err != nil {
 			return nil, domain.EditResultJSON{}, err

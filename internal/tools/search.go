@@ -175,7 +175,8 @@ func PerformSearch(db *sqlx.DB, root, keyword string, opts SearchOptions) (domai
 	maxPerFile := clampMaxPerFile(opts.MaxPerFile)
 	window := candidateWindow(limit)
 
-	candidates, total, filteredSensitive, err := fetchCandidates(db, andQuery, orQuery, multiTerm, kind, limit, maxPerFile, window, opts.IndexSensitive)
+	terms := searchTerms(keyword)
+	candidates, total, filteredSensitive, err := fetchCandidates(db, andQuery, orQuery, multiTerm, terms, kind, limit, maxPerFile, window, opts.IndexSensitive)
 	if err != nil {
 		return domain.SearchResponse{}, err
 	}
@@ -195,6 +196,7 @@ func PerformSearch(db *sqlx.DB, root, keyword string, opts SearchOptions) (domai
 				return domain.SearchResponse{}, err
 			}
 			hidden, _ = filterSensitiveCandidates(hidden, opts.IndexSensitive)
+			applySymbolScoring(hidden, terms)
 			eligible = append(filterKind(dedupeByFile(hidden, maxPerFile), kindCode), eligible...)
 		}
 	}
@@ -217,14 +219,22 @@ func PerformSearch(db *sqlx.DB, root, keyword string, opts SearchOptions) (domai
 		eligible = eligible[:limit]
 	}
 
-	terms := searchTerms(keyword)
+	hashes, err := fetchFileHashes(db, eligible)
+	if err != nil {
+		return domain.SearchResponse{}, err
+	}
+
 	for _, r := range eligible {
+		match := matchPart(terms, r.Filepath, r.Content)
+		hitLine, snippet := locateHitAndBuildSnippet(r.Content, r.StartLine, terms, match)
 		response.Results = append(response.Results, domain.SearchResultJSON{
 			Root:     root,
 			Filepath: r.Filepath,
-			Line:     fmt.Sprintf("%d-%d", r.StartLine, r.EndLine),
-			Snippet:  r.Snippet,
-			Match:    matchPart(terms, r.Filepath, r.Content),
+			Chunk:    fmt.Sprintf("%d-%d", r.StartLine, r.EndLine),
+			Line:     hitLine,
+			Snippet:  snippet,
+			Match:    match,
+			Hash:     hashes[r.Filepath],
 		})
 	}
 
@@ -245,7 +255,7 @@ func applyKindQuery(matchQuery string, kind fileKind) string {
 // fetchCandidates runs AND-first for multi-term queries so co-occurring matches
 // rank first without single-token noise flooding, falling back to OR only when
 // AND returns fewer unique files than limit.
-func fetchCandidates(db *sqlx.DB, andQuery, orQuery string, multiTerm bool, kind fileKind, limit, maxPerFile, window int, indexSensitive bool) ([]domain.SearchResultDB, int, int, error) {
+func fetchCandidates(db *sqlx.DB, andQuery, orQuery string, multiTerm bool, terms []string, kind fileKind, limit, maxPerFile, window int, indexSensitive bool) ([]domain.SearchResultDB, int, int, error) {
 	if !multiTerm {
 		matchQuery := applyKindQuery(orQuery, kind)
 		candidates, err := rankedCandidates(db, matchQuery, window)
@@ -257,6 +267,7 @@ func fetchCandidates(db *sqlx.DB, andQuery, orQuery string, multiTerm bool, kind
 			return nil, 0, 0, err
 		}
 		candidates, filtered := filterSensitiveCandidates(candidates, indexSensitive)
+		applySymbolScoring(candidates, terms)
 		return orderByKind(dedupeByFile(candidates, maxPerFile), kind), total, filtered, nil
 	}
 
@@ -267,6 +278,7 @@ func fetchCandidates(db *sqlx.DB, andQuery, orQuery string, multiTerm bool, kind
 	}
 	rawAndCount := len(andCandidates)
 	andCandidates, andFiltered := filterSensitiveCandidates(andCandidates, indexSensitive)
+	applySymbolScoring(andCandidates, terms)
 	andOrdered := orderByKind(dedupeByFile(andCandidates, maxPerFile), kind)
 	if len(andOrdered) >= limit {
 		andTotal, err := resolveTotal(db, andMatchQuery, rawAndCount, window)
@@ -286,6 +298,7 @@ func fetchCandidates(db *sqlx.DB, andQuery, orQuery string, multiTerm bool, kind
 		return nil, 0, 0, err
 	}
 	orCandidates, orFiltered := filterSensitiveCandidates(orCandidates, indexSensitive)
+	applySymbolScoring(orCandidates, terms)
 	orOrdered := orderByKind(dedupeByFile(orCandidates, maxPerFile), kind)
 	if len(andOrdered) == 0 {
 		return orOrdered, total, orFiltered, nil
@@ -334,21 +347,24 @@ func filterSensitiveCandidates(candidates []domain.SearchResultDB, indexSensitiv
 	return kept, filtered
 }
 
-// rankedCandidates fetches the best-ranked chunks for matchQuery. The match is
-// applied to the whole table rather than to the content column, so a token that
-// appears only in a file's path or identifier tails is found at all, and bm25()
-// weights the path above the body and exact body tokens above sub-token tails.
+// rankedCandidates fetches the best-ranked chunks for matchQuery, deferring
+// content column hydration to the bounded top-N winners so SQLite avoids
+// materializing content and snippet() across the full match set.
 // chunk_search columns are (id, filepath, start_line, end_line, content, tails),
 // which is why pathWeight sits second.
 func rankedCandidates(db *sqlx.DB, matchQuery string, window int) ([]domain.SearchResultDB, error) {
 	query := fmt.Sprintf(`
-		SELECT filepath, start_line, end_line, content,
-		       snippet(chunk_search, 4, '<b>', '</b>', '...', 10) AS snippet,
-		       bm25(chunk_search, 0, %d, 0, 0, 1, 0.5) AS score
-		FROM chunk_search
-		WHERE chunk_search MATCH ?
-		ORDER BY score
-		LIMIT ?
+		WITH top AS (
+			SELECT rowid, bm25(chunk_search, 0, %d, 0, 0, 1, 0.5) AS score
+			FROM chunk_search
+			WHERE chunk_search MATCH ?
+			ORDER BY score
+			LIMIT ?
+		)
+		SELECT c.filepath, c.start_line, c.end_line, c.content, top.score
+		FROM top
+		JOIN chunk_search c ON c.rowid = top.rowid
+		ORDER BY top.score
 	`, pathWeight)
 
 	var results []domain.SearchResultDB
@@ -356,6 +372,37 @@ func rankedCandidates(db *sqlx.DB, matchQuery string, window int) ([]domain.Sear
 		return nil, fmt.Errorf("SQLite query error: %w", err)
 	}
 	return results, nil
+}
+
+func fetchFileHashes(db *sqlx.DB, results []domain.SearchResultDB) (map[string]string, error) {
+	if len(results) == 0 {
+		return nil, nil
+	}
+	seen := make(map[string]struct{}, len(results))
+	paths := make([]string, 0, len(results))
+	for _, r := range results {
+		if _, ok := seen[r.Filepath]; !ok {
+			seen[r.Filepath] = struct{}{}
+			paths = append(paths, r.Filepath)
+		}
+	}
+
+	query, args, err := sqlx.In(`SELECT filepath, hash FROM indexed_files WHERE filepath IN (?)`, paths)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build hash query: %w", err)
+	}
+	var rows []struct {
+		Filepath string `db:"filepath"`
+		Hash     string `db:"hash"`
+	}
+	if err := db.Select(&rows, db.Rebind(query), args...); err != nil {
+		return nil, fmt.Errorf("SQLite hash lookup error: %w", err)
+	}
+	hashes := make(map[string]string, len(rows))
+	for _, row := range rows {
+		hashes[row.Filepath] = row.Hash
+	}
+	return hashes, nil
 }
 
 // dedupeByFile keeps up to maxPerFile non-overlapping best-ranked chunks per

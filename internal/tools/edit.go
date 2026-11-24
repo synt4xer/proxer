@@ -1,10 +1,12 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -21,6 +23,9 @@ var reindexFileContent = indexer.ReindexFileContentWithOptions
 type EditOptions struct {
 	IgnoredDirs    []string
 	IndexSensitive bool
+	OldContent     string
+	Occurrence     int
+	HasRange       bool
 }
 
 // PerformEdit replaces a line range in a file and reindexes it. The path is
@@ -36,10 +41,17 @@ func PerformEdit(db *sqlx.DB, root, path string, startLine, endLine int, newCont
 	})
 }
 
-// PerformEditWithOptions replaces a line range in a file after verifying DB
-// writability, writes atomically, and reports any post-write reindex failure
-// non-fatally in EditResultJSON.
+// PerformEditWithOptions replaces a line range (or an anchor block when
+// opts.OldContent is set) in a file after verifying hash and DB writability,
+// writes atomically, and reports any post-write reindex failure non-fatally.
 func PerformEditWithOptions(ctx context.Context, db *sqlx.DB, root, path string, startLine, endLine int, newContent, expectedHash string, opts EditOptions) (domain.EditResultJSON, error) {
+	if opts.OldContent != "" && opts.HasRange {
+		return domain.EditResultJSON{}, fmt.Errorf("cannot combine --old anchor mode with --start/--end line range")
+	}
+	if opts.Occurrence < 0 {
+		return domain.EditResultJSON{}, fmt.Errorf("occurrence must be >= 0, got %d", opts.Occurrence)
+	}
+
 	resolved, err := resolvePath(root, path)
 	if err != nil {
 		return domain.EditResultJSON{}, err
@@ -56,39 +68,28 @@ func PerformEditWithOptions(ctx context.Context, db *sqlx.DB, root, path string,
 
 	if expectedHash != "" {
 		if current := indexer.ContentHash(contentBytes); current != expectedHash {
-			return domain.EditResultJSON{}, fmt.Errorf("file '%s' changed since it was read. Read it again before editing", path)
+			return domain.EditResultJSON{}, fmt.Errorf("file '%s' changed since it was read (current hash %s). Read it again before editing", path, current)
 		}
-	}
-
-	lines := strings.Split(string(contentBytes), "\n")
-	totalLines := len(lines)
-
-	if startLine < 1 || startLine > totalLines || endLine < startLine || endLine > totalLines {
-		return domain.EditResultJSON{}, fmt.Errorf("invalid line range. The file has %d lines", totalLines)
 	}
 
 	if strings.Contains(newContent, config.TruncationMarker) {
 		return domain.EditResultJSON{}, fmt.Errorf("refusing to edit '%s': replacement content contains truncation marker %q", path, config.TruncationMarker)
 	}
 
-	for i := startLine; i <= endLine; i++ {
-		line := strings.TrimSuffix(lines[i-1], "\r")
-		if len(line) > config.MaxLineWidth && utf8.RuneCountInString(line) > config.MaxLineWidth {
-			return domain.EditResultJSON{}, fmt.Errorf("refusing to edit '%s': line %d exceeds %d characters and is truncated by read", path, i, config.MaxLineWidth)
+	var finalBytes []byte
+	var editStartLine, editEndLine int
+
+	if opts.OldContent != "" {
+		finalBytes, editStartLine, editEndLine, err = applyAnchorEdit(path, contentBytes, opts.OldContent, newContent, opts.Occurrence)
+		if err != nil {
+			return domain.EditResultJSON{}, err
+		}
+	} else {
+		finalBytes, editStartLine, editEndLine, err = applyRangeEdit(path, contentBytes, startLine, endLine, newContent)
+		if err != nil {
+			return domain.EditResultJSON{}, err
 		}
 	}
-
-	prefix := lines[:startLine-1]
-	suffix := lines[endLine:]
-
-	cleanNewContent := strings.TrimRight(newContent, "\r\n")
-
-	var finalLines []string
-	finalLines = append(finalLines, prefix...)
-	finalLines = append(finalLines, cleanNewContent)
-	finalLines = append(finalLines, suffix...)
-
-	finalBytes := []byte(strings.Join(finalLines, "\n"))
 
 	if err := database.CheckWritable(ctx, db); err != nil {
 		if database.IsReadOnlyError(err) {
@@ -104,6 +105,7 @@ func PerformEditWithOptions(ctx context.Context, db *sqlx.DB, root, path string,
 		return domain.EditResultJSON{}, fmt.Errorf("failed to save file: %w", err)
 	}
 
+	newHash := indexer.ContentHash(finalBytes)
 	err = reindexFileContent(db, root, resolved, finalBytes, indexer.IndexOptions{
 		IgnoredDirs:    opts.IgnoredDirs,
 		IndexSensitive: opts.IndexSensitive,
@@ -111,7 +113,8 @@ func PerformEditWithOptions(ctx context.Context, db *sqlx.DB, root, path string,
 	if err != nil {
 		return domain.EditResultJSON{
 			Status:        "success",
-			Message:       fmt.Sprintf("Saved lines %d-%d in %s on disk, but reindexing failed; run proxer index or wait for the next search refresh to reconcile.", startLine, endLine, path),
+			Message:       fmt.Sprintf("Saved lines %d-%d in %s on disk, but reindexing failed; run proxer index or wait for the next search refresh to reconcile.", editStartLine, editEndLine, path),
+			Hash:          newHash,
 			ReindexFailed: true,
 			ReindexError:  err.Error(),
 		}, nil
@@ -119,8 +122,106 @@ func PerformEditWithOptions(ctx context.Context, db *sqlx.DB, root, path string,
 
 	return domain.EditResultJSON{
 		Status:  "success",
-		Message: fmt.Sprintf("Successfully replaced lines %d-%d in %s and reindexed it.", startLine, endLine, path),
+		Message: fmt.Sprintf("Successfully updated %s (lines %d-%d)", path, editStartLine, editEndLine),
+		Hash:    newHash,
 	}, nil
+}
+
+func applyRangeEdit(path string, contentBytes []byte, startLine, endLine int, newContent string) ([]byte, int, int, error) {
+	lines := strings.Split(string(contentBytes), "\n")
+	totalLines := len(lines)
+
+	if startLine < 1 || startLine > totalLines || endLine < startLine || endLine > totalLines {
+		return nil, 0, 0, fmt.Errorf("invalid line range. The file has %d lines", totalLines)
+	}
+
+	for i := startLine; i <= endLine; i++ {
+		line := strings.TrimSuffix(lines[i-1], "\r")
+		if len(line) > config.MaxLineWidth && utf8.RuneCountInString(line) > config.MaxLineWidth {
+			return nil, 0, 0, fmt.Errorf("refusing to edit '%s': line %d exceeds %d characters and is truncated by read", path, i, config.MaxLineWidth)
+		}
+	}
+
+	prefix := lines[:startLine-1]
+	suffix := lines[endLine:]
+	cleanNewContent := strings.TrimRight(newContent, "\r\n")
+
+	var finalLines []string
+	finalLines = append(finalLines, prefix...)
+	finalLines = append(finalLines, cleanNewContent)
+	finalLines = append(finalLines, suffix...)
+
+	return []byte(strings.Join(finalLines, "\n")), startLine, endLine, nil
+}
+
+type anchorMatch struct {
+	start     int
+	end       int
+	startLine int
+	endLine   int
+}
+
+func applyAnchorEdit(path string, contentBytes []byte, oldContent, newContent string, occurrence int) ([]byte, int, int, error) {
+	hasCRLF := bytes.Contains(contentBytes, []byte("\r\n"))
+	normContent := strings.ReplaceAll(string(contentBytes), "\r\n", "\n")
+	normOld := strings.ReplaceAll(oldContent, "\r\n", "\n")
+	normNew := strings.ReplaceAll(newContent, "\r\n", "\n")
+
+	var matches []anchorMatch
+	searchFrom := 0
+	for {
+		idx := strings.Index(normContent[searchFrom:], normOld)
+		if idx < 0 {
+			break
+		}
+		absStart := searchFrom + idx
+		absEnd := absStart + len(normOld)
+		startLine := 1 + strings.Count(normContent[:absStart], "\n")
+		endLine := startLine + strings.Count(normOld, "\n")
+		matches = append(matches, anchorMatch{
+			start:     absStart,
+			end:       absEnd,
+			startLine: startLine,
+			endLine:   endLine,
+		})
+		searchFrom = absEnd
+	}
+
+	if len(matches) == 0 {
+		return nil, 0, 0, fmt.Errorf("old content not found in %s", path)
+	}
+	if len(matches) > 1 && occurrence == 0 {
+		lineStrs := make([]string, len(matches))
+		for i, m := range matches {
+			lineStrs[i] = strconv.Itoa(m.startLine)
+		}
+		return nil, 0, 0, fmt.Errorf("old content matched %d locations in %s at lines [%s]; pass --occurrence or a more specific block", len(matches), path, strings.Join(lineStrs, ", "))
+	}
+
+	targetIdx := 0
+	if occurrence > 0 {
+		if occurrence > len(matches) {
+			return nil, 0, 0, fmt.Errorf("occurrence %d out of range: old content matched %d location(s) in %s", occurrence, len(matches), path)
+		}
+		targetIdx = occurrence - 1
+	}
+
+	m := matches[targetIdx]
+	lines := strings.Split(normContent, "\n")
+	for i := m.startLine; i <= m.endLine; i++ {
+		if i >= 1 && i <= len(lines) {
+			if len(lines[i-1]) > config.MaxLineWidth && utf8.RuneCountInString(lines[i-1]) > config.MaxLineWidth {
+				return nil, 0, 0, fmt.Errorf("refusing to edit '%s': line %d exceeds %d characters and is truncated by read", path, i, config.MaxLineWidth)
+			}
+		}
+	}
+
+	updated := normContent[:m.start] + normNew + normContent[m.end:]
+	if hasCRLF {
+		updated = strings.ReplaceAll(updated, "\n", "\r\n")
+	}
+	newEndLine := m.startLine + strings.Count(normNew, "\n")
+	return []byte(updated), m.startLine, newEndLine, nil
 }
 
 // writeFileAtomically replaces path through a temporary file in the same
