@@ -1,6 +1,7 @@
 package indexer
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,8 +14,10 @@ import (
 )
 
 type IndexOptions struct {
+	Ctx            context.Context
 	IgnoredDirs    []string
 	IndexSensitive bool
+	BusyTimeoutMS  int
 }
 
 // Chunking is the window this build chunks with. It is handed to database.Open
@@ -82,6 +85,15 @@ func reindexFileWithContent(db *sqlx.DB, rootPath, path string, content []byte, 
 	}
 
 	if err := reindexFile(tx, writer, rootPath, rel, path, content, hasContent, opts); err != nil {
+		writer.Close()
+		return err
+	}
+
+	if err := database.IncrementWritesSinceOptimize(tx); err != nil {
+		writer.Close()
+		return err
+	}
+	if err := database.SetRootPath(tx, rootPath); err != nil {
 		writer.Close()
 		return err
 	}

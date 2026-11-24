@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/jmoiron/sqlx"
 
@@ -87,6 +88,90 @@ func Open(dbPath string, opts OpenOptions) (*sqlx.DB, error) {
 	return db, nil
 }
 
+// OpenReadOnly opens an existing index database in read-only mode without
+// creating directories, setting WAL mode, executing DDL, or modifying file
+// permissions. It tries ?mode=ro first and falls back to ?mode=ro&immutable=1
+// when a read-only mount prevents SQLite from opening WAL/SHM files.
+func OpenReadOnly(dbPath string, chunking Chunking) (*sqlx.DB, error) {
+	if !IsReadableFile(dbPath) {
+		return nil, fmt.Errorf("index database %q is not readable; set PROXER_DB=<writable-path> to use a writable database location", dbPath)
+	}
+
+	var lastErr error
+	for _, immutable := range []bool{false, true} {
+		db, err := sqlx.Connect("sqlite", readOnlyDSN(dbPath, immutable))
+		if err != nil {
+			lastErr = err
+			if !immutable && IsReadOnlyError(err) {
+				continue
+			}
+			return nil, fmt.Errorf("failed to open read-only index database %q: %w", dbPath, err)
+		}
+		db.SetMaxOpenConns(1)
+		if err := validateReadOnlySchema(db, chunking); err != nil {
+			db.Close()
+			lastErr = err
+			if !immutable && IsReadOnlyError(err) {
+				continue
+			}
+			return nil, err
+		}
+		return db, nil
+	}
+	return nil, fmt.Errorf("failed to open read-only index database %q: %w", dbPath, lastErr)
+}
+
+func validateReadOnlySchema(db *sqlx.DB, chunking Chunking) error {
+	version, err := metaValue(db, metaSchemaVersion)
+	if err != nil {
+		return fmt.Errorf("failed to read schema_version from read-only database: %w", err)
+	}
+	chunkSize, err := metaValue(db, metaChunkSize)
+	if err != nil {
+		return fmt.Errorf("failed to read chunk_size from read-only database: %w", err)
+	}
+	overlap, err := metaValue(db, metaOverlapSize)
+	if err != nil {
+		return fmt.Errorf("failed to read overlap_size from read-only database: %w", err)
+	}
+	if version != SchemaVersion ||
+		chunkSize != strconv.Itoa(chunking.Size) ||
+		overlap != strconv.Itoa(chunking.Overlap) {
+		return fmt.Errorf("read-only database schema (%q, %s/%s) does not match this binary (%q, %d/%d)",
+			version, chunkSize, overlap, SchemaVersion, chunking.Size, chunking.Overlap)
+	}
+	return nil
+}
+
+// IsReadableFile reports whether dbPath exists and can be opened for reading by
+// the current UID.
+func IsReadableFile(dbPath string) bool {
+	info, err := os.Stat(dbPath)
+	if err != nil || info.IsDir() {
+		return false
+	}
+	f, err := os.Open(dbPath)
+	if err != nil {
+		return false
+	}
+	f.Close()
+	return true
+}
+
+// ReadRecordedRoot reads meta.root_path from dbPath in read-only mode without
+// requiring schema version parity, so orphan detection works across versions.
+func ReadRecordedRoot(dbPath string) (string, error) {
+	if !IsReadableFile(dbPath) {
+		return "", os.ErrNotExist
+	}
+	db, err := sqlx.Connect("sqlite", readOnlyDSN(dbPath, true))
+	if err != nil {
+		return "", err
+	}
+	defer db.Close()
+	return metaValue(db, metaRootPath)
+}
+
 func isUnreadableExistingDB(dbPath string) bool {
 	if _, err := os.Stat(dbPath); err != nil {
 		return false
@@ -97,6 +182,16 @@ func isUnreadableExistingDB(dbPath string) bool {
 	}
 	f.Close()
 	return false
+}
+
+func readOnlyDSN(dbPath string, immutable bool) string {
+	escaped := (&url.URL{Path: filepath.ToSlash(dbPath)}).EscapedPath()
+	params := url.Values{}
+	params.Set("mode", "ro")
+	if immutable {
+		params.Set("immutable", "1")
+	}
+	return "file:" + escaped + "?" + params.Encode()
 }
 
 // dsn builds the SQLite URI for dbPath. Two settings cannot be expressed by a

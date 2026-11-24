@@ -35,6 +35,7 @@ type RefreshSummary struct {
 type IndexResponse struct {
 	Status         string         `json:"status" jsonschema:"human-readable result of the index run"`
 	Refreshed      RefreshSummary `json:"refreshed" jsonschema:"files added, changed, removed, and skipped by this run; all zero when the index was already current"`
+	DBSizeBytes    int64          `json:"db_size_bytes,omitempty,omitzero" jsonschema:"on-disk size of the index database in bytes after maintenance"`
 	IndexSensitive bool           `json:"index_sensitive,omitempty,omitzero" jsonschema:"true when sensitive files are explicitly opted into indexing"`
 	PurgePending   bool           `json:"purge_pending,omitempty,omitzero" jsonschema:"true when purged sensitive rows still await disk page or WAL reclamation"`
 	Warning        string         `json:"warning,omitempty" jsonschema:"non-fatal warning from index maintenance or disk scrubbing"`
@@ -47,6 +48,8 @@ type IndexResponse struct {
 type SearchResponse struct {
 	Root              string             `json:"root"`
 	IndexedAt         string             `json:"indexed_at,omitempty"`
+	Stale             bool               `json:"stale,omitempty,omitzero"`
+	StaleReason       string             `json:"stale_reason,omitempty"`
 	Refreshed         *RefreshSummary    `json:"refreshed,omitempty"`
 	Total             int                `json:"total"`
 	Truncated         bool               `json:"truncated"`
@@ -87,4 +90,30 @@ type EditResultJSON struct {
 	Hash          string `json:"hash,omitempty" jsonschema:"new full-file SHA-256 hash after the edit"`
 	ReindexFailed bool   `json:"reindex_failed,omitempty,omitzero" jsonschema:"true when the file was written to disk but post-write reindexing failed"`
 	ReindexError  string `json:"reindex_error,omitempty" jsonschema:"error returned by post-write reindexing when reindex_failed is true"`
+}
+
+type OrphanDatabase struct {
+	DBPath       string `json:"db_path"`
+	RecordedRoot string `json:"recorded_root"`
+	SizeBytes    int64  `json:"size_bytes"`
+	Pruned       bool   `json:"pruned"`
+}
+
+type StatusResponse struct {
+	Root            string           `json:"root"`
+	DBPath          string           `json:"db_path"`
+	DBSizeBytes     int64            `json:"db_size_bytes"`
+	DBMode          string           `json:"db_mode"`
+	SchemaVersion   string           `json:"schema_version"`
+	IndexedAt       string           `json:"indexed_at,omitempty"`
+	FilesIndexed    int              `json:"files_indexed"`
+	ChunksIndexed   int              `json:"chunks_indexed"`
+	IndexSensitive  bool             `json:"index_sensitive"`
+	PurgePending    bool             `json:"purge_pending"`
+	IgnoreSources   []string         `json:"ignore_sources"`
+	IgnoredDirs     int              `json:"ignored_dirs"`
+	SkippedByReason *SkippedCounts   `json:"skipped_by_reason,omitempty"`
+	InstallMode     string           `json:"install_mode,omitempty"`
+	OrphanDatabases []OrphanDatabase `json:"orphan_databases,omitempty"`
+	Warning         string           `json:"warning,omitempty"`
 }

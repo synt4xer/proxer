@@ -85,6 +85,15 @@ Measured on the dense 8,000-file / 72,000-chunk Go fixture (`CGO_ENABLED=0`, App
 | `search if` (656k occ., 9.1/chunk; `--no-refresh` / refreshed) | 1,273 ms / — | **101.4 / 141.1 ms** | **12.6×** |
 | `search "context value"` (1.32M + 2.62M occ.; `--no-refresh` / refreshed) | 3,422 ms / — | **361.1 / 402.3 ms** | **9.5×** |
 
+## 6. No-Op Refresh Walk Verification (`P4.1` — 2026-11-24)
+
+Re-measured on the exact 8,000-file / 72,000-chunk Go fixture (`CGO_ENABLED=0`, Apple-silicon Mac, warm cache, median of 7 CLI runs) after `P1b.1` (`.gitignore` parse-once-per-refresh):
+
+| Workload (`[CLI end-to-end]`) | Measured 2026-11-24 | Gate | Result |
+| --- | --- | --- | --- |
+| `proxer index` (no files changed) | **52.7 ms** | `< 80 ms` | Verified (single-threaded `computeDiff` retained) |
+| `proxer search` (rare symbol, auto-refreshed) | **56.8 ms** | `< 80 ms` | Verified |
+
 ---
 
 ## When Raw CLI Tools Win (Trade-Offs)

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/spf13/cobra"
@@ -19,10 +18,13 @@ import (
 const manageDBAnnotation = "ownDB"
 
 type cliState struct {
-	root   string
-	dbPath string
-	cfg    config.ProjectConfig
-	db     *sqlx.DB
+	root        string
+	dbPath      string
+	installMode string
+	skillDir    string
+	cfg         config.ProjectConfig
+	db          *sqlx.DB
+	readOnly    bool
 }
 
 func main() {
@@ -71,7 +73,18 @@ func newRootCommand(state *cliState) *cobra.Command {
 				return fmt.Errorf("failed to load the project config: %w", err)
 			}
 
-			state.dbPath = filepath.Join(state.root, config.DBFile)
+			dbFlag, err := cmd.Flags().GetString("db")
+			if err != nil {
+				return fmt.Errorf("failed to read the db flag: %w", err)
+			}
+
+			loc, err := config.ResolveDBPath(state.root, dbFlag, cmd.Name() == "mcp")
+			if err != nil {
+				return fmt.Errorf("failed to resolve database path: %w", err)
+			}
+			state.dbPath = loc.DBPath
+			state.installMode = string(loc.Mode)
+			state.skillDir = loc.SkillDir
 			if cmd.Annotations[manageDBAnnotation] == "true" {
 				return nil
 			}
@@ -81,12 +94,21 @@ func newRootCommand(state *cliState) *cobra.Command {
 				IndexSensitive: state.cfg.IndexSensitive,
 			})
 			if err != nil {
+				if database.IsReadOnlyError(err) && (cmd.Name() == "search" || cmd.Name() == "status" || cmd.Name() == "doctor") && database.IsReadableFile(state.dbPath) {
+					roDB, roErr := database.OpenReadOnly(state.dbPath, indexer.Chunking())
+					if roErr == nil {
+						state.db = roDB
+						state.readOnly = true
+						return nil
+					}
+				}
 				return fmt.Errorf("failed to initialize DB: %w", err)
 			}
 			return nil
 		},
 	}
 	rootCmd.PersistentFlags().String("root", "", "Project root to index and search (default: $"+config.RootEnvVar+", then the current directory)")
+	rootCmd.PersistentFlags().String("db", "", "Explicit path to the index database (default: $"+config.DBEnvVar+", then install-mode routing)")
 
 	indexCmd := &cobra.Command{
 		Use:   "index",
@@ -99,16 +121,24 @@ func newRootCommand(state *cliState) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("indexing failed: %w", err)
 			}
-			scrub, err := database.ScrubPurgedData(state.db, state.dbPath)
+			hadChunkChanges := refreshed.Added > 0 || refreshed.Changed > 0 || refreshed.Removed > 0
+			maint, err := database.Maintain(state.db, state.dbPath, database.MaintainOptions{
+				HadDiff: hadChunkChanges,
+			})
 			if err != nil {
-				return fmt.Errorf("indexing succeeded, but disk scrub failed: %w", err)
+				return fmt.Errorf("indexing succeeded, but maintenance failed: %w", err)
+			}
+			var dbSize int64
+			if info, statErr := os.Stat(state.dbPath); statErr == nil {
+				dbSize = info.Size()
 			}
 			return writeJSON(cmd.OutOrStdout(), domain.IndexResponse{
 				Status:         "indexed_successfully",
 				Refreshed:      refreshed.ToSummary(),
+				DBSizeBytes:    dbSize,
 				IndexSensitive: state.cfg.IndexSensitive,
-				PurgePending:   scrub.PurgePending,
-				Warning:        scrub.Warning,
+				PurgePending:   maint.PurgePending,
+				Warning:        maint.Warning,
 			})
 		},
 	}
@@ -126,7 +156,9 @@ func newRootCommand(state *cliState) *cobra.Command {
 			}
 
 			result, err := tools.PerformSearch(state.db, state.root, keyword, tools.SearchOptions{
+				Ctx:            cmd.Context(),
 				NoRefresh:      noRefresh || config.RefreshDisabled(),
+				ReadOnly:       state.readOnly,
 				IgnoredDirs:    state.cfg.IgnoredDirs,
 				IndexSensitive: state.cfg.IndexSensitive,
 				Limit:          limit,
@@ -212,7 +244,32 @@ func newRootCommand(state *cliState) *cobra.Command {
 	editCmd.MarkFlagRequired("filepath")
 	editCmd.Flags().StringVar(&editHash, "hash", "", "Hash returned by search or read; the edit is rejected if the file changed since then")
 
-	rootCmd.AddCommand(indexCmd, searchCmd, readCmd, editCmd, newMCPCommand(state))
+	var statusVacuum bool
+	var statusPrune bool
+	statusCmd := &cobra.Command{
+		Use:     "status",
+		Aliases: []string{"doctor"},
+		Short:   "Inspect index metadata, size, permissions, and maintenance state",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			result, err := tools.PerformStatus(state.db, state.root, tools.StatusOptions{
+				DBPath:         state.dbPath,
+				IndexSensitive: state.cfg.IndexSensitive,
+				ReadOnly:       state.readOnly,
+				Vacuum:         statusVacuum,
+				Prune:          statusPrune,
+				InstallMode:    state.installMode,
+				SkillDir:       state.skillDir,
+			})
+			if err != nil {
+				return err
+			}
+			return writeJSON(cmd.OutOrStdout(), result)
+		},
+	}
+	statusCmd.Flags().BoolVar(&statusVacuum, "vacuum", false, "Run FTS5 optimize, VACUUM, and WAL checkpoint on the database")
+	statusCmd.Flags().BoolVar(&statusPrune, "prune", false, "Delete orphaned harness databases whose recorded project root no longer exists")
+
+	rootCmd.AddCommand(indexCmd, searchCmd, readCmd, editCmd, statusCmd, newMCPCommand(state))
 	rootCmd.SilenceUsage = true
 	rootCmd.SilenceErrors = true
 
