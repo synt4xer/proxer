@@ -66,7 +66,7 @@ type SearchResultJSON struct {
 	Root     string `json:"root"`
 	Filepath string `json:"filepath"`
 	Chunk    string `json:"chunk"`
-	Line     int    `json:"line,omitempty"`
+	Line     int    `json:"line,omitempty,omitzero"`
 	Snippet  string `json:"snippet"`
 	Match    string `json:"match"`
 	Hash     string `json:"hash,omitempty"`
