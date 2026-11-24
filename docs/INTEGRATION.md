@@ -61,3 +61,12 @@ Three behaviours are worth knowing when you write the tool descriptions in a har
 - `search` returns at most `limit` results (five distinct files by default when `max_per_file=1`), ordered production code first, then tests, then docs, then generated assets, so a broad keyword is truncated rather than complete. `truncated` and `total` say so, and the model should treat a hit as a starting point and follow up with `read`.
 - `read` has no per-line buffer ceiling; lines longer than 4,096 characters are truncated past that width with ` [truncated]` to keep payloads bounded, while `hash` covers the entire file. Files dominated by lines exceeding 4,096 characters (such as single-line minified bundles) are skipped during indexing and reported in `refreshed.skipped`, while normal multi-line files with isolated long lines are indexed with those lines truncated.
 - `edit` rejects a `hash` that no longer matches the file, and the rejection is an error, not a silent no-op. Carry the hash from `read` so a concurrent write is refused instead of overwritten.
+
+## Harness Verification Log
+
+Recorded per release when verifying Agent Skill discovery and MCP stdio tool execution end-to-end:
+
+| Release / Commit | Date | Harness / Surface | Verified Flows | Notes |
+| --- | --- | --- | --- | --- |
+| `v0.6.0` (`4c8ff1a`) | 2026-11-23 | CLI (`proxer`) + MCP stdio (`proxer mcp`) | `index`, `search`, `read`, `edit`, `--version` | Version centralized via `config.Version`; MCP/CLI parity verified via `go test ./...`. |
+| pre-`v0.7.0` (`67015dd`) | 2026-11-24 | CLI (`proxer`) + MCP stdio (`proxer mcp`) + Agent Skill (`SKILL.md`) | `index`, `search` (rare + common, stale/busy/readonly), `read` (64 KB cap, `--numbered`), `edit` (range + anchor + `--hash`), `status` / `doctor` (`--vacuum`, `--prune`) | Verified on macOS arm64 (`CGO_ENABLED=0`, `modernc.org/sqlite v1.62.0`); CI release gate added in `.github/workflows/ci.yml`. |
