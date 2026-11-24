@@ -45,10 +45,15 @@ func TestOpenReadOnlyAndUnreadable(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "does not match")
 
-	// Unreadable DB file (0000) is rejected with PROXER_DB hint.
+	// Unreadable DB file (0000) is rejected with PROXER_DB hint by both Open and OpenReadOnly.
 	require.NoError(t, os.Chmod(dir, 0o755))
 	require.NoError(t, os.Chmod(dbPath, 0o000))
 	assert.False(t, IsReadableFile(dbPath))
+	if os.Geteuid() != 0 {
+		_, err = Open(dbPath, OpenOptions{Chunking: Chunking{Size: 60, Overlap: 15}})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "PROXER_DB")
+	}
 	_, err = OpenReadOnly(dbPath, Chunking{Size: 60, Overlap: 15})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "PROXER_DB")

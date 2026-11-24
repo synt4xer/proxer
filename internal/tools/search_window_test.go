@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/synt4xer/proxer/database"
 	"github.com/synt4xer/proxer/internal/config"
-	"github.com/synt4xer/proxer/internal/domain"
 	"github.com/synt4xer/proxer/internal/indexer"
 	"github.com/synt4xer/proxer/internal/tools"
 )
@@ -196,5 +195,4 @@ func TestCandidateWindowParityAgainstLegacyCTE(t *testing.T) {
 		assert.Equal(t, 4, res.Results[i].Line)
 		assert.Contains(t, res.Results[i].Snippet, "<b>if</b>")
 	}
-	_ = domain.SearchResponse{}
 }
