@@ -1,6 +1,7 @@
 # Proxer
 
 [![codecov](https://codecov.io/gh/synt4xer/proxer/graph/badge.svg)](https://codecov.io/gh/synt4xer/proxer)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 **Bounded-payload code search, targeted read, and hash-guarded edit for AI coding agents.**
 
@@ -105,4 +106,4 @@ Exposes `index`, `search`, `read`, `edit`, and `status` over stdio.
 
 ## License
 
-Released under the [GNU General Public License v3.0](LICENSE).
+Released under the [MIT License](LICENSE).
