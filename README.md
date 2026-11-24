@@ -1,5 +1,7 @@
 # Proxer
 
+[![codecov](https://codecov.io/gh/synt4xer/proxer/graph/badge.svg)](https://codecov.io/gh/synt4xer/proxer)
+
 **Bounded-payload code search, targeted read, and hash-guarded edit for AI coding agents.**
 
 Single static binary (CGO-free SQLite FTS5) · CLI, [Agent Skill](https://agentskills.io/specification), and MCP server.
