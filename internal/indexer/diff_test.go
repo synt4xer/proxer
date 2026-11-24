@@ -387,3 +387,26 @@ func TestIndexTruncatesEmbeddedLongLineInMultiLineSourceFile(t *testing.T) {
 	refreshedAgain := mustIndex(t, db, root, ignored)
 	assert.True(t, refreshedAgain.Empty(), "manifest must record the real on-disk file so subsequent walks do no work: %+v", refreshedAgain)
 }
+
+func TestDeltaBuildAddedReplacesExistingChunks(t *testing.T) {
+	root := t.TempDir()
+	db := openWorkspaceDB(t, root)
+	ignored := config.DefaultIgnoredDirs
+
+	write(t, filepath.Join(root, "a.go"), "func Alpha() {}\n")
+	mustIndex(t, db, root, ignored)
+	require.Len(t, chunkRowIDs(t, db, "a.go"), 1)
+
+	// Simulate a stale manifest snapshot (e.g. two processes indexing concurrently)
+	// where diff.Added writes a file whose chunks are already present in SQLite.
+	_, err := db.Exec("DELETE FROM indexed_files WHERE filepath = ?", "a.go")
+	require.NoError(t, err)
+
+	refreshed := mustIndex(t, db, root, ignored)
+	assert.Equal(t, indexer.Refreshed{Added: 1}, refreshed)
+	assert.Len(t, chunkRowIDs(t, db, "a.go"), 1, "re-adding a file with existing chunks must replace, not duplicate")
+
+	var mapped int
+	require.NoError(t, db.Get(&mapped, "SELECT COUNT(*) FROM index_chunks WHERE filepath = ?", "a.go"))
+	assert.Equal(t, 1, mapped)
+}

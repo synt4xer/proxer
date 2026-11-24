@@ -294,10 +294,7 @@ func applyDiff(db *sqlx.DB, rootPath string, diff *Diff, opts IndexOptions) (Ref
 		if filesystem.IsSensitivePath(entry.Path) {
 			resetPurgeSentinel = true
 		}
-		// An added file is absent from the manifest, so by construction it has
-		// no stored chunks: skipping the delete keeps a cold build from paying
-		// for a no-op statement per file.
-		stored, skipReason, err := storeCurrentFile(tx, writer, rootPath, entry, nil, false)
+		stored, skipReason, err := storeCurrentFile(tx, writer, rootPath, entry, nil, true)
 		if err != nil {
 			writer.Close()
 			return Refreshed{}, err
