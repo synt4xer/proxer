@@ -68,7 +68,7 @@ Example response:
 ```json
 {
   "root": "/path/to/repo",
-  "indexed_at": "2026-11-24T11:04:17.976384Z",
+  "indexed_at": "<RFC3339 timestamp>",
   "refreshed": {"added": 0, "changed": 0, "removed": 0, "skipped": 0},
   "total": 1,
   "truncated": false,
@@ -197,5 +197,5 @@ Every release tag (`v*`, enforced by `.github/workflows/ci.yml`) must pass:
 3. `CGO_ENABLED=0 go build ./...`
 4. `CGO_ENABLED=0 go test ./...` and `go test -race ./...`
 5. Fresh benchmark run on a fresh binary + fresh `.proxer.db` (see [BENCHMARKS.md](BENCHMARKS.md) §6)
-6. Update verification entry in [INTEGRATION.md](INTEGRATION.md)
+6. Verify CLI, MCP stdio, and Agent Skill flows (see [INTEGRATION.md](INTEGRATION.md) §3)
 7. Bump `config.Version` (`internal/config/config.go`) per semver and publish GitHub Release notes

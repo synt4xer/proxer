@@ -2,7 +2,7 @@
 
 All measurements below come from a single fresh build of the current codebase. No numbers from earlier builds or legacy fixtures are carried over.
 
-**Measurement stamp:** `2026-11-24` · commit `5cff2ae` · `macOS 26.5.1 arm64 (Apple M1)` · `Go 1.27.4` (`CGO_ENABLED=0`) · `modernc.org/sqlite v1.62.0` · warm cache · median of 7 runs (after 1 warmup) · `[CLI end-to-end]` (full subprocess startup, SQLite open, query/refresh, JSON stdout).
+**Environment:** `macOS 26.5.1 arm64 (Apple M1)` · `Go 1.27.4` (`CGO_ENABLED=0`) · `modernc.org/sqlite v1.62.0` · warm cache · median of 7 runs (after 1 warmup) · `[CLI end-to-end]` (full subprocess startup, SQLite open, query/refresh, JSON stdout).
 
 ---
 

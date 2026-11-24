@@ -12,7 +12,7 @@ Single static Go binary (CGO-free SQLite FTS5) · CLI, [Agent Skill](https://age
 
 Shell tools (`grep`, `sed`, ad-hoc `python3`) are built for human terminals, not LLM context windows. They either dump megabytes of unranked lines or return `0 hits` on natural multi-word and `camelCase` queries.
 
-Measured `[CLI end-to-end]` on the reproducible **8,000-file / 72,000-chunk Go fixture** + 143.6 KB minified JS file (`2026-11-24`, commit `5cff2ae`, Apple M1, `CGO_ENABLED=0`, `modernc.org/sqlite v1.62.0`, median of 7 runs):
+Measured `[CLI end-to-end]` on the reproducible **8,000-file / 72,000-chunk Go fixture** + 143.6 KB minified JS file (Apple M1, `CGO_ENABLED=0`, `modernc.org/sqlite v1.62.0`, median of 7 runs):
 
 | Operation (`[CLI end-to-end]`) | `proxer` | `grep -rn` | `sed` / `python3` |
 | --- | --- | --- | --- |
