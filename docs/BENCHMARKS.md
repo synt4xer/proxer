@@ -76,14 +76,14 @@ Measured on generated Go trees (16,000 and 64,000 chunks) comparing uniform FTS5
 
 ## 5. Query Cost Ceiling (`P2.1` — 2026-11-24)
 
-Measured on the dense 8,000-file / 72,000-chunk Go fixture (`CGO_ENABLED=0`, Apple-silicon Mac, warm cache, 1,528.1 B/chunk mean content, 104.9 MB total indexed chunk bytes, 170.0 MB DB, median of 7 CLI runs) after removing `count(*) OVER()` and the materializing CTE:
+Measured on the dense 8,000-file / 72,000-chunk Go fixture (`CGO_ENABLED=0`, Apple-silicon Mac, warm cache, 1,528.1 B/chunk mean content, 104.9 MB total indexed chunk bytes, 168.2 MB DB, median of 7 CLI runs) after removing `count(*) OVER()` and the materializing CTE:
 
 | Workload (`[CLI end-to-end]`) | Pre-`P2.1` (`v0.6.0`) | Post-`P2.1` (2026-11-24) | Speedup |
 | --- | --- | --- | --- |
-| `search` rare symbol (`--no-refresh` / refreshed) | 9.1 / 47.5 ms | **15.9 / 77.8 ms** | — |
-| `search func` (656k occ., 9.1/chunk; `--no-refresh` / refreshed) | 1,364 / 1,389 ms | **161.8 / 224.1 ms** | **8.4× / 6.2×** |
-| `search if` (656k occ., 9.1/chunk; `--no-refresh` / refreshed) | 1,273 ms / — | **161.1 / 221.0 ms** | **7.9×** |
-| `search "context value"` (1.32M + 2.62M occ.; `--no-refresh` / refreshed) | 3,422 ms / — | **571.0 / 660.3 ms** | **6.0×** |
+| `search` rare symbol (`--no-refresh` / refreshed) | 9.1 / 47.5 ms | **10.3 / 50.3 ms** | — |
+| `search func` (656k occ., 9.1/chunk; `--no-refresh` / refreshed) | 1,364 / 1,389 ms | **100.9 / 141.1 ms** | **13.5× / 9.8×** |
+| `search if` (656k occ., 9.1/chunk; `--no-refresh` / refreshed) | 1,273 ms / — | **101.4 / 141.1 ms** | **12.6×** |
+| `search "context value"` (1.32M + 2.62M occ.; `--no-refresh` / refreshed) | 3,422 ms / — | **361.1 / 402.3 ms** | **9.5×** |
 
 ---
 
