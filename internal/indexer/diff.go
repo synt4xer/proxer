@@ -3,7 +3,7 @@ package indexer
 import (
 	"context"
 	"database/sql/driver"
-	"encoding/json"
+	json "encoding/json/v2"
 	"fmt"
 	"io/fs"
 	"os"
