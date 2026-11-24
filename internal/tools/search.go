@@ -78,7 +78,7 @@ func candidateWindow(limit int) int {
 // against a result's path, and both have to agree on what a term is.
 func searchTerms(keyword string) []string {
 	return strings.FieldsFunc(keyword, func(r rune) bool {
-		return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_'
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
 	})
 }
 
@@ -247,39 +247,43 @@ func applyKindQuery(matchQuery string, kind fileKind) string {
 // AND returns fewer unique files than limit.
 func fetchCandidates(db *sqlx.DB, andQuery, orQuery string, multiTerm bool, kind fileKind, limit, maxPerFile, window int, indexSensitive bool) ([]domain.SearchResultDB, int, int, error) {
 	if !multiTerm {
-		candidates, err := rankedCandidates(db, applyKindQuery(orQuery, kind), window)
+		matchQuery := applyKindQuery(orQuery, kind)
+		candidates, err := rankedCandidates(db, matchQuery, window)
 		if err != nil {
 			return nil, 0, 0, err
 		}
-		total := 0
-		if len(candidates) > 0 {
-			total = candidates[0].Total
+		total, err := resolveTotal(db, matchQuery, len(candidates), window)
+		if err != nil {
+			return nil, 0, 0, err
 		}
 		candidates, filtered := filterSensitiveCandidates(candidates, indexSensitive)
 		return orderByKind(dedupeByFile(candidates, maxPerFile), kind), total, filtered, nil
 	}
 
-	andCandidates, err := rankedCandidates(db, applyKindQuery(andQuery, kind), window)
+	andMatchQuery := applyKindQuery(andQuery, kind)
+	andCandidates, err := rankedCandidates(db, andMatchQuery, window)
 	if err != nil {
 		return nil, 0, 0, err
 	}
-	andTotal := 0
-	if len(andCandidates) > 0 {
-		andTotal = andCandidates[0].Total
-	}
+	rawAndCount := len(andCandidates)
 	andCandidates, andFiltered := filterSensitiveCandidates(andCandidates, indexSensitive)
 	andOrdered := orderByKind(dedupeByFile(andCandidates, maxPerFile), kind)
 	if len(andOrdered) >= limit {
+		andTotal, err := resolveTotal(db, andMatchQuery, rawAndCount, window)
+		if err != nil {
+			return nil, 0, 0, err
+		}
 		return andOrdered, andTotal, andFiltered, nil
 	}
 
-	orCandidates, err := rankedCandidates(db, applyKindQuery(orQuery, kind), window)
+	orMatchQuery := applyKindQuery(orQuery, kind)
+	orCandidates, err := rankedCandidates(db, orMatchQuery, window)
 	if err != nil {
 		return nil, 0, 0, err
 	}
-	total := 0
-	if len(orCandidates) > 0 {
-		total = orCandidates[0].Total
+	total, err := resolveTotal(db, orMatchQuery, len(orCandidates), window)
+	if err != nil {
+		return nil, 0, 0, err
 	}
 	orCandidates, orFiltered := filterSensitiveCandidates(orCandidates, indexSensitive)
 	orOrdered := orderByKind(dedupeByFile(orCandidates, maxPerFile), kind)
@@ -301,6 +305,17 @@ func fetchCandidates(db *sqlx.DB, andQuery, orQuery string, multiTerm bool, kind
 		merged = append(merged, r)
 	}
 	return merged, total, orFiltered, nil
+}
+
+func resolveTotal(db *sqlx.DB, matchQuery string, rawCount, window int) (int, error) {
+	if rawCount < window {
+		return rawCount, nil
+	}
+	var total int
+	if err := db.Get(&total, `SELECT count(*) FROM chunk_search WHERE chunk_search MATCH ?`, matchQuery); err != nil {
+		return 0, fmt.Errorf("SQLite count error: %w", err)
+	}
+	return total, nil
 }
 
 func filterSensitiveCandidates(candidates []domain.SearchResultDB, indexSensitive bool) ([]domain.SearchResultDB, int) {
@@ -327,15 +342,11 @@ func filterSensitiveCandidates(candidates []domain.SearchResultDB, indexSensitiv
 // which is why pathWeight sits second.
 func rankedCandidates(db *sqlx.DB, matchQuery string, window int) ([]domain.SearchResultDB, error) {
 	query := fmt.Sprintf(`
-		WITH matched AS (
-			SELECT filepath, start_line, end_line, content,
-			       snippet(chunk_search, 4, '<b>', '</b>', '...', 10) AS snippet,
-			       bm25(chunk_search, 0, %d, 0, 0, 1, 0.5) AS score
-			FROM chunk_search
-			WHERE chunk_search MATCH ?
-		)
-		SELECT filepath, start_line, end_line, content, snippet, score, count(*) OVER() AS total
-		FROM matched
+		SELECT filepath, start_line, end_line, content,
+		       snippet(chunk_search, 4, '<b>', '</b>', '...', 10) AS snippet,
+		       bm25(chunk_search, 0, %d, 0, 0, 1, 0.5) AS score
+		FROM chunk_search
+		WHERE chunk_search MATCH ?
 		ORDER BY score
 		LIMIT ?
 	`, pathWeight)
