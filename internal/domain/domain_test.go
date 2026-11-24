@@ -93,9 +93,11 @@ func TestSearchResponseJSONContractAndOmitEmpty(t *testing.T) {
 				{
 					Root:     "/repo",
 					Filepath: "main.go",
-					Line:     "1-10",
+					Chunk:    "1-10",
+					Line:     4,
 					Snippet:  "func <b>Handle</b>()",
 					Match:    "content",
+					Hash:     "abc123",
 				},
 			},
 		}

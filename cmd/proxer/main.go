@@ -146,6 +146,7 @@ func newRootCommand(state *cliState) *cobra.Command {
 
 	var filepathFlag string
 	var startLine, endLine int
+	var numbered bool
 	readCmd := &cobra.Command{
 		Use:   "read",
 		Short: "Read specific lines from a file",
@@ -157,7 +158,9 @@ func newRootCommand(state *cliState) *cobra.Command {
 				return errors.New("filepath cannot be empty")
 			}
 
-			result, err := tools.PerformRead(state.root, filepathFlag, startLine, endLine)
+			result, err := tools.PerformReadWithOptions(state.root, filepathFlag, startLine, endLine, tools.ReadOptions{
+				Numbered: numbered,
+			})
 			if err != nil {
 				return err
 			}
@@ -167,14 +170,17 @@ func newRootCommand(state *cliState) *cobra.Command {
 	readCmd.Flags().StringVarP(&filepathFlag, "filepath", "f", "", "Path to the file (required)")
 	readCmd.Flags().IntVarP(&startLine, "start", "s", 1, "Start line")
 	readCmd.Flags().IntVarP(&endLine, "end", "e", 60, "End line")
+	readCmd.Flags().BoolVarP(&numbered, "numbered", "n", false, "Prefix each line with its 1-based line number and a tab")
 	readCmd.MarkFlagRequired("filepath")
 
 	var editFilepath string
 	var editStart, editEnd int
 	var editHash string
+	var editOld string
+	var editOccurrence int
 	editCmd := &cobra.Command{
 		Use:   "edit",
-		Short: "Replace specific lines in a file with new content from STDIN",
+		Short: "Replace specific lines or an anchor block in a file with new content from STDIN",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if editFilepath == "" {
 				return errors.New("filepath cannot be empty")
@@ -184,9 +190,13 @@ func newRootCommand(state *cliState) *cobra.Command {
 				return fmt.Errorf("failed to read new content from stdin: %w", err)
 			}
 
+			hasRange := cmd.Flags().Changed("start") || cmd.Flags().Changed("end")
 			result, err := tools.PerformEditWithOptions(cmd.Context(), state.db, state.root, editFilepath, editStart, editEnd, string(newContentBytes), editHash, tools.EditOptions{
 				IgnoredDirs:    state.cfg.IgnoredDirs,
 				IndexSensitive: state.cfg.IndexSensitive,
+				OldContent:     editOld,
+				Occurrence:     editOccurrence,
+				HasRange:       hasRange,
 			})
 			if err != nil {
 				return err
@@ -197,8 +207,10 @@ func newRootCommand(state *cliState) *cobra.Command {
 	editCmd.Flags().StringVarP(&editFilepath, "filepath", "f", "", "Path to file")
 	editCmd.Flags().IntVarP(&editStart, "start", "s", 1, "Start line to replace")
 	editCmd.Flags().IntVarP(&editEnd, "end", "e", 1, "End line to replace")
+	editCmd.Flags().StringVar(&editOld, "old", "", "Exact text block to replace (anchor mode; mutually exclusive with --start/--end)")
+	editCmd.Flags().IntVar(&editOccurrence, "occurrence", 0, "1-based occurrence index when --old matches multiple times (default 0 requires a unique match)")
 	editCmd.MarkFlagRequired("filepath")
-	editCmd.Flags().StringVar(&editHash, "hash", "", "Hash returned by read; the edit is rejected if the file changed since then")
+	editCmd.Flags().StringVar(&editHash, "hash", "", "Hash returned by search or read; the edit is rejected if the file changed since then")
 
 	rootCmd.AddCommand(indexCmd, searchCmd, readCmd, editCmd, newMCPCommand(state))
 	rootCmd.SilenceUsage = true

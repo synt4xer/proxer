@@ -192,8 +192,9 @@ func TestCandidateWindowParityAgainstLegacyCTE(t *testing.T) {
 	assert.Equal(t, legacy[0].Total, res.Total)
 	for i := range 5 {
 		assert.Equal(t, legacy[i].Filepath, res.Results[i].Filepath)
-		assert.Equal(t, fmt.Sprintf("%d-%d", legacy[i].StartLine, legacy[i].EndLine), res.Results[i].Line)
-		assert.Equal(t, legacy[i].Snippet, res.Results[i].Snippet)
+		assert.Equal(t, fmt.Sprintf("%d-%d", legacy[i].StartLine, legacy[i].EndLine), res.Results[i].Chunk)
+		assert.Equal(t, 4, res.Results[i].Line)
+		assert.Contains(t, res.Results[i].Snippet, "<b>if</b>")
 	}
 	_ = domain.SearchResponse{}
 }
