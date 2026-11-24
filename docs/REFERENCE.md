@@ -1,190 +1,201 @@
 # CLI & Configuration Reference
 
-This document covers Proxer's architecture, installation, CLI commands, JSON schemas, configuration, and limitations. For Agent Skill and MCP server setup, see [INTEGRATION.md](INTEGRATION.md).
+Reference for Proxer's installation, root/database resolution, CLI commands, JSON schemas, `.proxer.json`, and limitations. For Agent Skill and MCP server setup, see [INTEGRATION.md](INTEGRATION.md).
 
-## Local-First Architecture & Root Resolution
+---
 
-Proxer is designed to be installed **locally inside the target project** (e.g., `.agents/skills/proxer`) rather than globally. This avoids naming collisions, allows per-project version pinning, and isolates each project's `.proxer.db`.
+## 1. Build & Install
 
-Every invocation resolves the **project root** in this order:
+```bash
+make test
+make build
+make install DEST=/path/to/your-project
+```
+
+- `make build` produces a static CGO-free binary (`./bin/proxer`) using `modernc.org/sqlite`.
+- `make install DEST=...` copies `SKILL.md` and the binary into `<DEST>/.agents/skills/proxer/` without modifying `.gitignore` or project configs. Add `.proxer.db*` to `.gitignore` or `.git/info/exclude` if desired.
+- For a user-level install shared across repos, run `make install DEST=$HOME`.
+
+---
+
+## 2. Root & Database Resolution
+
+Every command resolves the project root in this order:
 
 ```
 --root <path>  →  PROXER_ROOT  →  working directory
 ```
 
-The SQLite FTS5 database lives at `<root>/.proxer.db`, and every stored path is relative to `<root>`. Harnesses can spawn `proxer` from any directory or set `PROXER_ROOT` without the index drifting. Relative `-f` paths resolve against `<root>` as well.
+Database location (`--db` / `PROXER_DB`) resolves by install mode:
+1. **Override:** `--db <path>` or `PROXER_DB` if set.
+2. **Project mode:** `<root>/.proxer.db` when `.agents/skills/proxer/` or `.proxer.db` exists in `<root>` (or for standalone CLI invocations).
+3. **Harness mode:** `<skillDir>/database/<repo>-<hash12>.db` when invoked from a user-level skill directory (`~/.agents/skills/proxer/`, `PROXER_SKILL_DIR`) or `proxer mcp` without a project-local DB.
 
-## Compilation & Installation
+All `-f` file paths resolve relative to `<root>`. Paths escaping `<root>` (including via symlinks) are rejected.
 
-### Build & Test
+---
 
-```bash
-make test
-make build
-```
+## 3. CLI Commands
 
-`make build` compiles a CGO-free static binary powered by `modernc.org/sqlite`.
+All commands print JSON to stdout and write errors to stderr with a non-zero exit code. Global flags: `--root <path>`, `--db <path>`, `--version`.
 
-### Install into a Target Project
-
-Point `DEST` to the root of the project where your agent works:
-
-```bash
-make install DEST=/path/to/my-awesome-project
-```
-
-This installs the skill package as a single unit without modifying `.gitignore` or project config files (add `.proxer.db*` to `.gitignore` or `.git/info/exclude` yourself if desired):
-
-```
-/path/to/my-awesome-project/.agents/skills/proxer/
-├── SKILL.md
-└── scripts/proxer
-```
-
-For a global skill shared across multiple projects, run `make install DEST=$HOME` and pass `--root` or set `PROXER_ROOT`.
-
-## Command Reference
-
-All commands output JSON on stdout and write errors to stderr with a non-zero exit code. Every command accepts `--root <path>`.
-
-| Command | Purpose |
+| Command | Summary |
 | --- | --- |
-| `index` | Bring `.proxer.db` in line with the project tree (new, changed, and deleted files; skips minified/long-line blobs). |
-| `search -k <keyword> [-n <limit>] [--max-per-file <count>] [--kind code\|docs\|all] [--no-refresh]` | Refresh the index, then return up to `limit` distinct files (default `5`, max `50`) with up to `max-per-file` non-overlapping chunks per file (default `1`, max `5`). |
-| `read -f <file> -s <start> -e <end>` | Return `root`, `filepath`, the inclusive line range (lines >4,096 chars truncated with ` [truncated]`), and file `hash`. |
-| `edit -f <file> -s <start> -e <end> [--hash <hash>]` | Replace the line range with stdin content, then reindex only that file. |
-| `mcp` | Serve `index`, `search`, `read`, and `edit` as MCP tools over stdio. |
+| `index` | Incrementally update the index (new, changed, deleted files; skips minified blobs, `.gitignore` matches, and sensitive files by default). |
+| `search -k <query> [-n 1..50] [--kind all\|code\|docs] [--no-refresh]` | Auto-refresh the index, then return up to `limit` distinct files (default `5`) ranked `code` → `test` → `docs` → `assets`. |
+| `read -f <file> [-s 1] [-e 60] [-n\|--numbered]` | Return an inclusive line range (4,096-char line cap, 64 KB response cap) plus whole-file SHA-256 `hash`. |
+| `edit -f <file> (-s <start> -e <end> \| --old <text> [--occurrence N]) [--hash <sha256>]` | Replace a line range or exact anchor block with stdin content, write atomically, and reindex only that file. |
+| `status` (alias `doctor`) `[--vacuum] [--prune]` | Inspect index metadata, DB size/permissions, ignore sources, and optional maintenance (`--vacuum`, `--prune` orphaned harness DBs). |
+| `mcp` | Serve `index`, `search`, `read`, `edit`, and `status` over MCP stdio. |
 
 ### `index`
 
 ```bash
-./.agents/skills/proxer/scripts/proxer index
+proxer index
 ```
 
-The build is incremental: files whose size and modification time match the manifest are skipped, unchanged byte hashes are only re-stamped, and deleted paths are removed. Files dominated by lines longer than 4,096 characters (such as minified bundles) are skipped and counted in `skipped`, while multi-line source files with isolated long lines are indexed with those lines truncated.
-
-You do not need to run `index` manually before `search`, because `search` refreshes automatically. Run `index` upfront when preparing a large repo or after a big `git pull`.
+Incremental by default: files matching cached size + mtime are skipped; unchanged hashes are only re-stamped; deleted paths are removed. You do not need to run `index` before `search` unless you want to pay the initial build cost up front.
 
 ### `search`
 
 ```bash
-./.agents/skills/proxer/scripts/proxer search -k "authMiddleware"
-./.agents/skills/proxer/scripts/proxer search -k "authMiddleware" --root ~/code/my-awesome-project
+proxer search -k "verifySignatureToken7722"
+proxer search -k "auth session" -n 10 --kind code
 ```
 
 Example response:
 
 ```json
 {
-  "root": "/home/dev/code/my-awesome-project",
-  "indexed_at": "2026-11-16T03:38:29.543151Z",
-  "refreshed": {"added": 1, "changed": 2, "removed": 0, "skipped": 0},
-  "total": 12,
-  "truncated": true,
+  "root": "/path/to/repo",
+  "indexed_at": "2026-11-24T11:04:17.976384Z",
+  "refreshed": {"added": 0, "changed": 0, "removed": 0, "skipped": 0},
+  "total": 1,
+  "truncated": false,
   "results": [
     {
-      "root": "/home/dev/code/my-awesome-project",
-      "filepath": "internal/auth.go",
-      "line": "40-99",
-      "snippet": "...<b>AuthMiddleware</b>...",
-      "match": "content"
+      "root": "/path/to/repo",
+      "filepath": "pkg_077/file_007722.go",
+      "chunk": "1-58",
+      "line": 5,
+      "snippet": "func <b>verifySignatureToken7722</b>(ctx context.Context, value string) string {",
+      "match": "content",
+      "hash": "ffa74c66..."
     }
   ]
 }
 ```
 
-Field notes:
-- `root`: Absolute path of the indexed project.
-- `indexed_at`: Timestamp when the index last changed (not when it was last checked).
-- `refreshed`: Counts of files added, changed, removed, and skipped during the pre-query refresh (omitted when `--no-refresh` or `PROXER_NO_REFRESH=1` is active).
-- `total` / `truncated`: Total matching chunks and whether results were capped by `limit`. `results` is `[]` (never `null`) when nothing matches.
-- `match`: `path`, `content`, or `both`. Path-only hits match the filename/path even if the chunk text does not contain the term.
-- `line`: The 60-line chunk boundary (15-line overlap), not the exact hit line.
-- `-n/--limit`: Maximum results returned (`1..50`, default `5`).
-- `--max-per-file`: Maximum non-overlapping chunks returned from any single file (`1..5`, default `1`).
-- `--kind`: `all` (default: production code, tests, docs, assets), `code`, or `docs`.
-- `--no-refresh` / `PROXER_NO_REFRESH=1`: Query the existing index without walking the filesystem (useful for read-only mounts or pinned snapshots).
-
-Query details:
-- Every term is matched as a token prefix (`auth` matches `AuthMiddleware`).
-- On code and config files, `camelCase` and `PascalCase` identifiers are also sub-tokenized into trailing segments of at least 3 characters (`middleware` matches `AuthMiddleware`).
-- Multi-term queries run `AND`-first and fall back to `OR` when `AND` yields no results.
-- Free-form punctuation and FTS5 operators are sanitized automatically so natural language never triggers a syntax error.
+Key behavior:
+- **Matching:** Token-prefix matching (`auth` → `AuthMiddleware`), `camelCase`/`PascalCase` tail indexing (3+ chars on code/config, so `Signature` → `verifySignatureToken7722`), `AND`-first with `OR` fallback, 5× path weight, and automatic FTS5 punctuation sanitization.
+- **Fields:** `chunk` is the 60-line window (`15`-line overlap); `line` is the matched line number when available; `match` is `path`, `content`, or `both`; `results` is always an array (`[]` when empty).
+- **Read-only / pinned queries:** Pass `--no-refresh` or set `PROXER_NO_REFRESH=1` to skip the filesystem walk (`refreshed` is omitted). If the DB is read-only on disk, `search` falls back to read-only mode and sets `"stale": true`.
 
 ### `read`
 
 ```bash
-./.agents/skills/proxer/scripts/proxer read -f "internal/auth.go" -s 40 -e 70
+proxer read -f "pkg_077/file_007722.go" -s 1 -e 10 --numbered
 ```
 
-Returns `{"root": "...", "filepath": "...", "content": "...", "hash": "..."}`.
+Returns:
 
-`read` has no per-line buffer ceiling. Lines exceeding 4,096 characters are truncated with ` [truncated]` to keep payloads bounded, while `hash` always covers the SHA-256 of the complete file on disk.
+```json
+{
+  "root": "/path/to/repo",
+  "filepath": "pkg_077/file_007722.go",
+  "start_line": 1,
+  "end_line": 10,
+  "total_lines": 376,
+  "truncated": false,
+  "next_start": 11,
+  "content": "...",
+  "hash": "ffa74c66..."
+}
+```
+
+Lines >4,096 chars are capped with ` [truncated]`, and total output is capped at `64 KB` (setting `truncated: true` and `next_start`). `hash` always covers the full file on disk.
 
 ### `edit`
 
-```bash
-./.agents/skills/proxer/scripts/proxer read -f "internal/auth.go" -s 52 -e 58
-# -> {"root": "...", "filepath": "internal/auth.go", "content": "...", "hash": "1f0c..."}
+Line-range mode:
 
-./.agents/skills/proxer/scripts/proxer edit -f "internal/auth.go" -s 52 -e 58 --hash "1f0c..." <<'EOF'
+```bash
+proxer edit -f "internal/auth.go" -s 52 -e 58 --hash "1f0c..." <<'EOF'
 func AuthMiddleware(next http.Handler) http.Handler {
 	return requireSession(next)
 }
 EOF
 ```
 
-`edit` replaces exact inclusive line numbers (`-s` to `-e`) from stdin and **automatically reindexes only the edited file**. Passing `--hash` from the preceding `read` rejects the write with a non-zero exit if the file changed in between.
+Anchor mode (mutually exclusive with `-s`/`-e`):
 
-## Project Configuration (`.proxer.json`)
+```bash
+proxer edit -f "internal/auth.go" --old "return oldHandler(next)" --hash "1f0c..." <<'EOF'
+return requireSession(next)
+EOF
+```
 
-Add a `.proxer.json` file in the project root to extend the built-in skip list:
+- Writes atomically via temp file + rename and reindexes **only** the edited file.
+- `--hash` rejects the write if the file changed since `read` or `search`.
+- Refuses edits targeting truncated lines (>4,096 chars) or containing ` [truncated]`.
+- Returns `{"status": "...", "message": "...", "hash": "<new-sha256>"}`.
+
+### `status` (`doctor`)
+
+```bash
+proxer status
+proxer status --vacuum
+proxer status --prune
+```
+
+Reports `db_path`, `db_size_bytes`, `db_mode`, `schema_version`, `indexed_at`, `files_indexed`, `chunks_indexed`, `ignore_sources`, `install_mode`, and any `orphan_databases`. `--vacuum` runs FTS5 optimize, `VACUUM`, and WAL checkpoint; `--prune` removes orphaned harness DBs whose project root no longer exists.
+
+---
+
+## 4. Configuration (`.proxer.json` & Environment)
+
+Optional `<root>/.proxer.json` (strictly decoded; malformed JSON or invalid entries fail fast):
 
 ```json
 {
-  "ignored_dirs": ["third_party", "generated", "mocks"]
+  "ignored_dirs": ["third_party", "generated"],
+  "index_sensitive": false
 }
 ```
 
-- Directory names match at any depth and are merged with the built-in defaults (`.git`, `node_modules`, `dist`, `.next`, `.agents`, etc. in `internal/config/config.go`).
-- A malformed `.proxer.json` aborts the command with a non-zero exit code instead of silently indexing excluded directories.
-- Changes take effect on the next `search` refresh or `index`. `edit` will not re-add a file under an ignored directory.
+- `ignored_dirs`: Single directory names or base-name globs (e.g. `*.egg-info`) merged with `config.DefaultIgnoredDirs` and `.gitignore`.
+- `index_sensitive`: Defaults to `false` (skips `.env`, keys, certs, and secret files). Set to `true` only if you intentionally want sensitive files indexed.
 
-## Repository Layout
+Environment variables:
 
-```
-cmd/proxer/          CLI entry point (Cobra)
-database/            SQLite store: connection, schema, chunk rows, file manifest
-internal/domain/     Result models
-internal/config/     Indexing limits and allowlists
-internal/filesystem/ Indexability predicates
-internal/indexer/    Delta build, chunk windows, and single-file reindex
-internal/mcpserver/  MCP stdio server exposing the operations as tools
-internal/tools/      Search, read, and edit operations
-skills/proxer/       Agent Skill package (installed into the target project)
-docs/                Documentation and integration guides
-```
+| Variable | Effect |
+| --- | --- |
+| `PROXER_ROOT` | Project root fallback when `--root` is omitted |
+| `PROXER_DB` | Explicit DB path override when `--db` is omitted |
+| `PROXER_NO_REFRESH` | Truthy value (`1`, `true`, `yes`) disables pre-search refresh |
+| `PROXER_SKILL_DIR` | Override user-level skill directory for harness DB routing |
 
-## Limitations
+---
 
-- **Project scope:** `read` and `edit` reject `../` and paths outside `<root>`. Use the harness's built-in file tools for external files.
-- **Stat-gated refresh:** `search` refreshes by checking file size and modification time; a same-size write within the same timestamp tick is skipped until something else changes.
-- **Refresh walk cost:** Every `search` stats the tree (~36 ms at 8,000 files) unless `--no-refresh` or `PROXER_NO_REFRESH=1` is used.
-- **No regex or glob matching:** `search` uses FTS5 token-prefix matching plus `camelCase`/`PascalCase` sub-token tails (3+ chars on code/config files), not arbitrary substring, regex, or glob patterns.
-- **Capped results:** `search` defaults to 5 distinct files (up to 50 with `-n/--limit`); check `total` and `truncated` when completeness matters.
-- **Indexed extensions only:** Files outside the known source/document allowlists or exact names (`Dockerfile`, `Makefile`, `go.mod`, etc., up to 1 MB) are not searchable, though `read` and `edit` still work on them.
-- **Line-range edits only:** Creating or deleting files is out of scope; `edit` replaces existing line ranges.
-- **Concurrent writers:** Simultaneous edits do not merge; always pass `--hash` from `read` to prevent silent overwrites.
-- **Not a semantic analyzer:** Proxer locates and edits text; pair it with a language server (`gopls`, `tsserver`, `rust-analyzer`) for type resolution and call-graph navigation.
+## 5. Limitations
 
-## Release Gate Checklist
+- **Project scope:** `read` and `edit` reject paths outside `<root>`.
+- **No regex or globs:** `search` uses FTS5 token-prefix + `camelCase` tail indexing, not regex.
+- **Stat-gated refresh:** Same-size writes within the same filesystem mtime tick are skipped until another change occurs.
+- **Indexed allowlist:** Files outside `config.AllowedExtensions` / `config.AllowedExactNames` or >1 MB are not searchable (`read` and `edit` still work on them).
+- **Existing files only:** `edit` modifies existing files; creating/deleting files is out of scope.
+- **Not a semantic analyzer:** Pair with an LSP (`gopls`, `tsserver`, `rust-analyzer`) for type checking and call graphs.
 
-Every release tag (`v*`, enforced by `.github/workflows/ci.yml` from `v0.7.0` onward) must pass:
+---
 
-1. **Formatting:** `test -z "$(gofmt -l .)"`
-2. **Static analysis:** `go vet ./...`
-3. **Pure-Go build:** `CGO_ENABLED=0 go build ./...`
-4. **Tests:** `CGO_ENABLED=0 go test ./...` and `go test -race ./...`
-5. **Benchmarks:** Re-measure rare + common-term search (`func`, `if`, `context value`) and no-op refresh on a fresh binary and fresh `.proxer.db` using the recipe in [BENCHMARKS.md](BENCHMARKS.md) §5, and stamp date, commit/tag, OS/CPU, and `modernc.org/sqlite` version.
-6. **Harness verification:** Update the verification table in [INTEGRATION.md](INTEGRATION.md) with the release date and verified surfaces.
-7. **Version & release notes:** Bump `config.Version` (`internal/config/config.go`) per semver (feature = MINOR, fix = PATCH, docs-only = no tag) and publish release notes on the git release tag / GitHub Release (no committed `CHANGELOG.md`).
+## 6. Release Gate Checklist
+
+Every release tag (`v*`, enforced by `.github/workflows/ci.yml`) must pass:
+
+1. `test -z "$(gofmt -l .)"`
+2. `go vet ./...`
+3. `CGO_ENABLED=0 go build ./...`
+4. `CGO_ENABLED=0 go test ./...` and `go test -race ./...`
+5. Fresh benchmark run on a fresh binary + fresh `.proxer.db` (see [BENCHMARKS.md](BENCHMARKS.md) §6)
+6. Update verification entry in [INTEGRATION.md](INTEGRATION.md)
+7. Bump `config.Version` (`internal/config/config.go`) per semver and publish GitHub Release notes
