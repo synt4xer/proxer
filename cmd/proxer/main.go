@@ -15,7 +15,10 @@ import (
 	"github.com/synt4xer/proxer/internal/tools"
 )
 
-const manageDBAnnotation = "ownDB"
+const (
+	manageDBAnnotation = "ownDB"
+	skipDBAnnotation   = "noDB"
+)
 
 type cliState struct {
 	root        string
@@ -71,6 +74,10 @@ func newRootCommand(state *cliState) *cobra.Command {
 			state.cfg, err = config.LoadProjectConfig(state.root)
 			if err != nil {
 				return fmt.Errorf("failed to load the project config: %w", err)
+			}
+
+			if cmd.Annotations[skipDBAnnotation] == "true" {
+				return nil
 			}
 
 			dbFlag, err := cmd.Flags().GetString("db")
@@ -183,7 +190,7 @@ func newRootCommand(state *cliState) *cobra.Command {
 		Use:   "read",
 		Short: "Read specific lines from a file",
 		Annotations: map[string]string{
-			manageDBAnnotation: "true",
+			skipDBAnnotation: "true",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if filepathFlag == "" {
