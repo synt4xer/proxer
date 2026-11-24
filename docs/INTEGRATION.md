@@ -69,8 +69,10 @@ pi mcp add -l proxer -- .agents/skills/proxer/scripts/proxer mcp --root .
 
 ---
 
-## 3. Verification Status
+## 3. Verification Scope
 
-| Commit | Date | Surfaces Verified | Flows |
-| --- | --- | --- | --- |
-| `5cff2ae` | 2026-11-24 | CLI (`proxer`), MCP stdio (`proxer mcp`), Agent Skill (`SKILL.md`) | `index`, `search`, `read` (`--numbered`, 64 KB cap), `edit` (range + `--old` anchor + `--hash`), `status`/`doctor` (`--vacuum`, `--prune`) on macOS arm64 (`CGO_ENABLED=0`, `modernc.org/sqlite v1.62.0`). |
+| Surface | Verified Flows |
+| --- | --- |
+| CLI (`proxer`) | `index`, `search`, `read` (`--numbered`, 64 KB cap), `edit` (range + `--old` anchor + `--hash`), `status`/`doctor` (`--vacuum`, `--prune`) |
+| MCP stdio (`proxer mcp`) | `index`, `search`, `read`, `edit`, `status`, 2s refresh cooldown, read-only fallback |
+| Agent Skill (`SKILL.md`) | Project-local and user-level (`$HOME`) install via `make install` |
