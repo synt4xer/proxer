@@ -82,9 +82,9 @@ func TestBuildMatchQuery(t *testing.T) {
 			ok:       true,
 		},
 		{
-			name:     "underscore survives tokenization",
+			name:     "underscore splits consistently with unicode61",
 			keyword:  "auth_middleware",
-			expected: `"auth_middleware"*`,
+			expected: `"auth"* OR "middleware"*`,
 			ok:       true,
 		},
 		{
@@ -159,4 +159,10 @@ func TestBuildMatchQueries(t *testing.T) {
 	assert.True(t, multi)
 	assert.Equal(t, `"auth"* AND "middleware"* AND "token"*`, andQ)
 	assert.Equal(t, `"auth"* OR "middleware"* OR "token"*`, orQ)
+
+	andQ, orQ, multi, ok = buildMatchQueries("user_id")
+	assert.True(t, ok)
+	assert.True(t, multi)
+	assert.Equal(t, `"user"* AND "id"*`, andQ)
+	assert.Equal(t, `"user"* OR "id"*`, orQ)
 }
