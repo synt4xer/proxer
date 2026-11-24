@@ -96,12 +96,11 @@ func (s *Server) addSearchTool() {
 		Description: "Search the full-text index. Every term matches as a token prefix and multiple terms run AND-first with OR fallback. " +
 			"Terms are matched against file paths as well as content, so a token that only names a file still finds it. " +
 			"On code and config files, camelCase and PascalCase identifiers are also sub-tokenized (3+ chars), so both 'auth' and 'middleware' reach 'AuthMiddleware'. " +
-			"Before querying it brings the index up to date, so files changed by other tools are found without calling index first. " +
-			"Returns the absolute project root, the indexed_at timestamp of the last index change, the refreshed counts for this call, " +
-			"the total number of matching chunks, whether the result list was truncated, and up to `limit` results (default 5), " +
+			"Before querying it brings the index up to date (subject to a short cooldown), so files changed by other tools are found without calling index first; " +
+			"on read-only or busy databases it serves the existing snapshot with stale=true and stale_reason. " +
+			"Returns the absolute project root, indexed_at, refreshed counts when refreshed, total matching chunks, truncated, optional index_sensitive/purge_pending/filtered_sensitive flags, and up to `limit` results (default 5), " +
 			"ordered production code first, then test files, then documentation, then generated assets unless `kind` narrows it. " +
-			"Each result carries a filepath relative to that root, a line range, a snippet where matches are wrapped in <b> tags, " +
-			"and whether its terms matched the path, the content, or both. " +
+			"Each result carries a relative filepath, chunk line span, first matching 1-based line (omitted on path-only hits), a snippet with matches wrapped in <b> tags, match kind (path, content, or both), and the current full-file SHA-256 hash. " +
 			"Empty or punctuation-only input returns no matches.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in searchInput) (*mcp.CallToolResult, domain.SearchResponse, error) {
 		noRefresh := s.shouldSkipRefresh()
@@ -157,8 +156,9 @@ func (s *Server) addReadTool() {
 		Name: "read",
 		Description: "Read an inclusive line range from a file. The filepath is relative to the project root; " +
 			"absolute paths inside the root are accepted and paths outside it are rejected. " +
-			"Returns the absolute project root, the filepath as given, the requested lines (each terminated by a newline; lines exceeding 4096 characters are truncated with \" [truncated]\"), " +
-			"and a hash of the file. Pass that hash to edit so a change between the read and the edit is refused.",
+			"Returns root, filepath, start_line, end_line, total_lines, truncated, next_start (when more lines remain), content, and the full-file SHA-256 hash. " +
+			"Responses are capped at 64 KB on a whole-line boundary, lines exceeding 4096 characters are truncated with \" [truncated]\", and numbered=true prefixes each line with its 1-based line number and a tab. " +
+			"Pass the returned hash to edit so a change between read and edit is refused.",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in readInput) (*mcp.CallToolResult, domain.ReadResultJSON, error) {
 		start, end := in.Start, in.End
 		if start <= 0 {
@@ -181,11 +181,12 @@ func (s *Server) addReadTool() {
 func (s *Server) addEditTool() {
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name: "edit",
-		Description: "Replace an inclusive line range in a file and reindex the file. The filepath is relative to the project root; " +
-			"absolute paths inside the root are accepted and paths outside it are rejected. " +
-			"The replacement need not have the same number of lines as the range. The file is written atomically. " +
-			"Pass the hash from a prior read of the same file: if the file changed since that read, the edit is rejected and nothing is written. " +
-			"Replacements containing the \" [truncated]\" marker or targeting lines exceeding 4096 characters are also rejected.",
+		Description: "Replace an inclusive line range (start/end) or an exact text block (old_content with optional 1-based occurrence) in a file and reindex the file. " +
+			"The two modes are mutually exclusive. The filepath is relative to the project root; absolute paths inside the root are accepted and paths outside it are rejected. " +
+			"The file is written atomically and the new full-file SHA-256 hash is returned for chaining edits. " +
+			"Pass the hash from a prior search or read of the same file: if the file changed since then, the edit is rejected and nothing is written. " +
+			"Replacements containing the \" [truncated]\" marker or targeting lines exceeding 4096 characters are rejected. " +
+			"If post-write reindexing fails, the write succeeds and reindex_failed/reindex_error are reported non-fatally.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in editInput) (*mcp.CallToolResult, domain.EditResultJSON, error) {
 		result, err := tools.PerformEditWithOptions(ctx, s.db, s.root, in.Filepath, in.Start, in.End, in.Content, in.Hash, tools.EditOptions{
 			IgnoredDirs:    s.ignoredDirs,
