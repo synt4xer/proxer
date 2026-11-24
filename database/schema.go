@@ -11,12 +11,16 @@ import (
 )
 
 const (
-	metaSchemaVersion  = "schema_version"
-	metaChunkSize      = "chunk_size"
-	metaOverlapSize    = "overlap_size"
-	metaIndexedAt      = "indexed_at"
-	metaSensitivePurge = "sensitive_purge"
-	metaPurgePending   = "purge_pending"
+	metaSchemaVersion       = "schema_version"
+	metaChunkSize           = "chunk_size"
+	metaOverlapSize         = "overlap_size"
+	metaIndexedAt           = "indexed_at"
+	metaSensitivePurge      = "sensitive_purge"
+	metaPurgePending        = "purge_pending"
+	metaWritesSinceOptimize = "writes_since_optimize"
+	metaRootPath            = "root_path"
+	metaLastIgnoredDirs     = "last_ignored_dirs"
+	metaLastSkipped         = "last_skipped"
 )
 
 // The index is four stores, not one:
@@ -119,6 +123,95 @@ func ResetSensitivePurge(tx *sqlx.Tx) error {
 	return setMeta(tx, metaSensitivePurge, "0")
 }
 
+// WritesSinceOptimize returns the number of chunk-mutating write transactions
+// recorded since the last FTS5 optimize run.
+func WritesSinceOptimize(db *sqlx.DB) (int, error) {
+	val, err := metaValue(db, metaWritesSinceOptimize)
+	if err != nil || val == "" {
+		return 0, err
+	}
+	n, err := strconv.Atoi(val)
+	if err != nil {
+		return 0, nil
+	}
+	return n, nil
+}
+
+// IncrementWritesSinceOptimize increments meta.writes_since_optimize inside a
+// write transaction.
+func IncrementWritesSinceOptimize(tx *sqlx.Tx) error {
+	val, err := metaValue(tx, metaWritesSinceOptimize)
+	if err != nil {
+		return err
+	}
+	n := 0
+	if val != "" {
+		if parsed, perr := strconv.Atoi(val); perr == nil {
+			n = parsed
+		}
+	}
+	return setMeta(tx, metaWritesSinceOptimize, strconv.Itoa(n+1))
+}
+
+func SetRootPath(tx *sqlx.Tx, rootPath string) error {
+	return setMeta(tx, metaRootPath, rootPath)
+}
+
+func SetWalkStats(tx *sqlx.Tx, ignoredDirs int, skippedJSON string) error {
+	if err := setMeta(tx, metaLastIgnoredDirs, strconv.Itoa(ignoredDirs)); err != nil {
+		return err
+	}
+	return setMeta(tx, metaLastSkipped, skippedJSON)
+}
+
+type StatusMeta struct {
+	RootPath        string
+	SchemaVersion   string
+	IndexedAt       string
+	PurgePending    bool
+	FilesIndexed    int
+	ChunksIndexed   int
+	LastIgnoredDirs int
+	LastSkippedJSON string
+}
+
+func ReadStatusMeta(db *sqlx.DB) (StatusMeta, error) {
+	var out StatusMeta
+	var err error
+	if out.RootPath, err = metaValue(db, metaRootPath); err != nil {
+		return out, err
+	}
+	if out.SchemaVersion, err = metaValue(db, metaSchemaVersion); err != nil {
+		return out, err
+	}
+	if out.IndexedAt, err = metaValue(db, metaIndexedAt); err != nil {
+		return out, err
+	}
+	pp, err := metaValue(db, metaPurgePending)
+	if err != nil {
+		return out, err
+	}
+	out.PurgePending = pp == "1"
+
+	if ign, err := metaValue(db, metaLastIgnoredDirs); err != nil {
+		return out, err
+	} else if ign != "" {
+		if n, convErr := strconv.Atoi(ign); convErr == nil {
+			out.LastIgnoredDirs = n
+		}
+	}
+	if out.LastSkippedJSON, err = metaValue(db, metaLastSkipped); err != nil {
+		return out, err
+	}
+	if err := db.Get(&out.FilesIndexed, "SELECT count(*) FROM indexed_files"); err != nil {
+		return out, err
+	}
+	if err := db.Get(&out.ChunksIndexed, "SELECT count(*) FROM index_chunks"); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
 // migrate creates every table the index needs and, when the database was built
 // by a different binary, empties it so the next build starts from the tree. A
 // pre-manifest database has chunks but no rowid map and no manifest: running a
@@ -190,12 +283,13 @@ func reset(db *sqlx.DB, chunking Chunking) error {
 	// indexed_at is cleared with the rows it described: a timestamp from a
 	// database that was just emptied would claim an index that does not exist.
 	for key, value := range map[string]string{
-		metaSchemaVersion:  SchemaVersion,
-		metaChunkSize:      strconv.Itoa(chunking.Size),
-		metaOverlapSize:    strconv.Itoa(chunking.Overlap),
-		metaIndexedAt:      "",
-		metaSensitivePurge: "",
-		metaPurgePending:   "",
+		metaSchemaVersion:       SchemaVersion,
+		metaChunkSize:           strconv.Itoa(chunking.Size),
+		metaOverlapSize:         strconv.Itoa(chunking.Overlap),
+		metaIndexedAt:           "",
+		metaSensitivePurge:      "",
+		metaPurgePending:        "",
+		metaWritesSinceOptimize: "0",
 	} {
 		if err := setMeta(tx, key, value); err != nil {
 			return err

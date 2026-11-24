@@ -28,12 +28,22 @@ func newMCPCommand(state *cliState) *cobra.Command {
 			if dbPath == "" {
 				dbPath = filepath.Join(state.root, config.DBFile)
 			}
+			var readOnly bool
 			serverDB, err := database.Open(dbPath, database.OpenOptions{
 				Chunking:       indexer.Chunking(),
 				IndexSensitive: state.cfg.IndexSensitive,
 			})
 			if err != nil {
-				return fmt.Errorf("failed to initialize DB: %w", err)
+				if database.IsReadOnlyError(err) && database.IsReadableFile(dbPath) {
+					roDB, roErr := database.OpenReadOnly(dbPath, indexer.Chunking())
+					if roErr == nil {
+						serverDB = roDB
+						readOnly = true
+					}
+				}
+				if serverDB == nil {
+					return fmt.Errorf("failed to initialize DB: %w", err)
+				}
 			}
 			defer serverDB.Close()
 
@@ -44,6 +54,9 @@ func newMCPCommand(state *cliState) *cobra.Command {
 				IgnoredDirs:    state.cfg.IgnoredDirs,
 				IndexSensitive: state.cfg.IndexSensitive,
 				DBPath:         dbPath,
+				ReadOnly:       readOnly,
+				InstallMode:    state.installMode,
+				SkillDir:       state.skillDir,
 			}).Run(ctx, &mcp.StdioTransport{})
 		},
 	}

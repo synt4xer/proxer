@@ -227,7 +227,7 @@ func TestCheckWritablePreflight(t *testing.T) {
 
 		var timeout int
 		require.NoError(t, db.Get(&timeout, "PRAGMA busy_timeout"))
-		assert.Equal(t, defaultBusyTimeoutMS, timeout, "busy_timeout must be restored to 5000")
+		assert.Equal(t, DefaultBusyTimeoutMS, timeout, "busy_timeout must be restored to 5000")
 	})
 
 	require.NoError(t, db.Close())

@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"os"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -37,11 +38,16 @@ type editInput struct {
 	Hash       string `json:"hash,omitempty" jsonschema:"hash returned by an earlier search or read of this file; when set, the edit is rejected if the file changed since that read"`
 }
 
+type statusInput struct {
+	Vacuum bool `json:"vacuum,omitempty" jsonschema:"run FTS5 optimize, VACUUM, and WAL checkpoint on the database"`
+}
+
 func (s *Server) registerTools() {
 	s.addIndexTool()
 	s.addSearchTool()
 	s.addReadTool()
 	s.addEditTool()
+	s.addStatusTool()
 }
 
 func (s *Server) addIndexTool() {
@@ -59,19 +65,27 @@ func (s *Server) addIndexTool() {
 		if err != nil {
 			return nil, domain.IndexResponse{}, err
 		}
-		var scrub database.ScrubResult
+		hadChunkChanges := refreshed.Added > 0 || refreshed.Changed > 0 || refreshed.Removed > 0
+		var maint database.MaintainResult
+		var dbSize int64
 		if s.dbPath != "" {
-			scrub, err = database.ScrubPurgedData(s.db, s.dbPath)
+			maint, err = database.Maintain(s.db, s.dbPath, database.MaintainOptions{
+				HadDiff: hadChunkChanges,
+			})
 			if err != nil {
 				return nil, domain.IndexResponse{}, err
+			}
+			if info, statErr := os.Stat(s.dbPath); statErr == nil {
+				dbSize = info.Size()
 			}
 		}
 		return nil, domain.IndexResponse{
 			Status:         "indexed_successfully",
 			Refreshed:      refreshed.ToSummary(),
+			DBSizeBytes:    dbSize,
 			IndexSensitive: s.indexSensitive,
-			PurgePending:   scrub.PurgePending,
-			Warning:        scrub.Warning,
+			PurgePending:   maint.PurgePending,
+			Warning:        maint.Warning,
 		}, nil
 	})
 }
@@ -89,10 +103,12 @@ func (s *Server) addSearchTool() {
 			"Each result carries a filepath relative to that root, a line range, a snippet where matches are wrapped in <b> tags, " +
 			"and whether its terms matched the path, the content, or both. " +
 			"Empty or punctuation-only input returns no matches.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in searchInput) (*mcp.CallToolResult, domain.SearchResponse, error) {
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in searchInput) (*mcp.CallToolResult, domain.SearchResponse, error) {
 		noRefresh := s.shouldSkipRefresh()
 		response, err := tools.PerformSearch(s.db, s.root, in.Keyword, tools.SearchOptions{
+			Ctx:            ctx,
 			NoRefresh:      noRefresh,
+			ReadOnly:       s.readOnly,
 			IgnoredDirs:    s.ignoredDirs,
 			IndexSensitive: s.indexSensitive,
 			Limit:          in.Limit,
@@ -183,5 +199,25 @@ func (s *Server) addEditTool() {
 		}
 		s.invalidateRefresh()
 		return nil, result, nil
+	})
+}
+
+func (s *Server) addStatusTool() {
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "status",
+		Description: "Inspect index metadata, database size, file permissions, and maintenance state without walking the workspace.",
+	}, func(_ context.Context, _ *mcp.CallToolRequest, in statusInput) (*mcp.CallToolResult, domain.StatusResponse, error) {
+		res, err := tools.PerformStatus(s.db, s.root, tools.StatusOptions{
+			DBPath:         s.dbPath,
+			IndexSensitive: s.indexSensitive,
+			ReadOnly:       s.readOnly,
+			Vacuum:         in.Vacuum,
+			InstallMode:    s.installMode,
+			SkillDir:       s.skillDir,
+		})
+		if err != nil {
+			return nil, domain.StatusResponse{}, err
+		}
+		return nil, res, nil
 	})
 }

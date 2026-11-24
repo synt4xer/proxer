@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"unicode"
@@ -116,7 +117,9 @@ func buildMatchQueries(keyword string) (andQuery, orQuery string, multiTerm bool
 // gets the default instead of an error. Kind filters and orders the results by
 // path class: the empty value keeps all of them, code first.
 type SearchOptions struct {
+	Ctx            context.Context
 	NoRefresh      bool
+	ReadOnly       bool
 	IgnoredDirs    []string
 	IndexSensitive bool
 	Limit          int
@@ -142,16 +145,31 @@ func PerformSearch(db *sqlx.DB, root, keyword string, opts SearchOptions) (domai
 		Results:        make([]domain.SearchResultJSON, 0),
 	}
 
-	if !opts.NoRefresh {
+	if opts.ReadOnly {
+		response.Stale = true
+		response.StaleReason = "readonly"
+	} else if !opts.NoRefresh {
 		refreshed, err := indexer.IndexProjectWithOptions(db, root, indexer.IndexOptions{
+			Ctx:            opts.Ctx,
 			IgnoredDirs:    opts.IgnoredDirs,
 			IndexSensitive: opts.IndexSensitive,
+			BusyTimeoutMS:  database.SearchRefreshBusyTimeoutMS,
 		})
 		if err != nil {
-			return domain.SearchResponse{}, fmt.Errorf("failed to refresh the index: %w", err)
+			switch {
+			case database.IsBusyError(err):
+				response.Stale = true
+				response.StaleReason = "busy"
+			case database.IsReadOnlyError(err):
+				response.Stale = true
+				response.StaleReason = "readonly"
+			default:
+				return domain.SearchResponse{}, fmt.Errorf("failed to refresh the index: %w", err)
+			}
+		} else {
+			summary := refreshed.ToSummary()
+			response.Refreshed = &summary
 		}
-		summary := refreshed.ToSummary()
-		response.Refreshed = &summary
 	}
 
 	indexedAt, err := database.IndexedAt(db)

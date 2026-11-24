@@ -25,6 +25,9 @@ type Options struct {
 	IgnoredDirs    []string
 	IndexSensitive bool
 	DBPath         string
+	ReadOnly       bool
+	InstallMode    string
+	SkillDir       string
 }
 
 type Server struct {
@@ -33,6 +36,9 @@ type Server struct {
 	dbPath          string
 	ignoredDirs     []string
 	indexSensitive  bool
+	readOnly        bool
+	installMode     string
+	skillDir        string
 	noRefresh       bool
 	refreshCooldown time.Duration
 	now             func() time.Time
@@ -57,6 +63,9 @@ func NewWithOptions(db *sqlx.DB, root string, opts Options) *Server {
 		dbPath:          opts.DBPath,
 		ignoredDirs:     opts.IgnoredDirs,
 		indexSensitive:  opts.IndexSensitive,
+		readOnly:        opts.ReadOnly,
+		installMode:     opts.InstallMode,
+		skillDir:        opts.SkillDir,
 		noRefresh:       config.RefreshDisabled(),
 		refreshCooldown: defaultRefreshCooldown,
 		now:             time.Now,

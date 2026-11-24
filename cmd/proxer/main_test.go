@@ -122,8 +122,9 @@ func TestCLIGoldenEnvelopes(t *testing.T) {
 	code, stdout, stderr := runCLI([]string{"--root", root, "index"}, "")
 	indexObj := decodeSingleLineJSON(t, code, stdout, stderr)
 	assertJSONSchema(t, indexObj, map[string]jsonType{
-		"status":    jsonString,
-		"refreshed": jsonObject,
+		"status":        jsonString,
+		"refreshed":     jsonObject,
+		"db_size_bytes": jsonInt,
 	})
 	assert.Equal(t, "indexed_successfully", unmarshalJSON[string](t, indexObj["status"]))
 	refreshedObj := unmarshalJSON[map[string]jsontext.Value](t, indexObj["refreshed"])

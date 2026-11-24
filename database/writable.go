@@ -14,8 +14,9 @@ import (
 )
 
 const (
-	defaultBusyTimeoutMS   = 5000
-	preflightBusyTimeoutMS = 250
+	DefaultBusyTimeoutMS       = 5000
+	SearchRefreshBusyTimeoutMS = 250
+	preflightBusyTimeoutMS     = 250
 )
 
 // CheckWritable verifies that db accepts writes before a caller mutates files
@@ -34,7 +35,7 @@ func CheckWritable(ctx context.Context, db *sqlx.DB) error {
 	defer func() {
 		restoreCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
 		defer cancel()
-		if _, rerr := conn.ExecContext(restoreCtx, fmt.Sprintf("PRAGMA busy_timeout = %d", defaultBusyTimeoutMS)); rerr != nil {
+		if _, rerr := conn.ExecContext(restoreCtx, fmt.Sprintf("PRAGMA busy_timeout = %d", DefaultBusyTimeoutMS)); rerr != nil {
 			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
 		}
 	}()

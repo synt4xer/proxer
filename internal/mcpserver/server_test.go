@@ -81,7 +81,7 @@ func TestServerExposesFourTools(t *testing.T) {
 	for _, tool := range list.Tools {
 		names = append(names, tool.Name)
 	}
-	assert.ElementsMatch(t, []string{"index", "search", "read", "edit"}, names)
+	assert.ElementsMatch(t, []string{"index", "search", "read", "edit", "status"}, names)
 }
 
 func TestServerWorkflow(t *testing.T) {

@@ -1,11 +1,15 @@
 package indexer
 
 import (
+	"context"
+	"database/sql/driver"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/synt4xer/proxer/database"
@@ -258,7 +262,34 @@ func computeDiff(db *sqlx.DB, rootPath string, opts IndexOptions) (*Diff, error)
 // reaches this function, which is what keeps a no-change refresh free of the
 // write lock a concurrent reader would have to queue behind.
 func applyDiff(db *sqlx.DB, rootPath string, diff *Diff, opts IndexOptions) (Refreshed, error) {
-	tx, err := db.Beginx()
+	var tx *sqlx.Tx
+	var err error
+	if opts.BusyTimeoutMS > 0 {
+		ctx := opts.Ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		conn, cerr := db.Connx(ctx)
+		if cerr != nil {
+			return Refreshed{}, cerr
+		}
+		defer conn.Close()
+
+		if _, cerr := conn.ExecContext(ctx, fmt.Sprintf("PRAGMA busy_timeout = %d", opts.BusyTimeoutMS)); cerr != nil {
+			return Refreshed{}, cerr
+		}
+		defer func() {
+			restoreCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+			defer cancel()
+			if _, rerr := conn.ExecContext(restoreCtx, fmt.Sprintf("PRAGMA busy_timeout = %d", database.DefaultBusyTimeoutMS)); rerr != nil {
+				_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+			}
+		}()
+
+		tx, err = conn.BeginTxx(ctx, nil)
+	} else {
+		tx, err = db.Beginx()
+	}
 	if err != nil {
 		return Refreshed{}, err
 	}
@@ -334,6 +365,28 @@ func applyDiff(db *sqlx.DB, rootPath string, diff *Diff, opts IndexOptions) (Ref
 			writer.Close()
 			return Refreshed{}, err
 		}
+	}
+
+	if refreshed.Added > 0 || refreshed.Changed > 0 || refreshed.Removed > 0 {
+		if err := database.IncrementWritesSinceOptimize(tx); err != nil {
+			writer.Close()
+			return Refreshed{}, err
+		}
+	}
+
+	if err := database.SetRootPath(tx, rootPath); err != nil {
+		writer.Close()
+		return Refreshed{}, err
+	}
+	skippedJSON := "{}"
+	if refreshed.SkippedByReason != nil {
+		if b, jerr := json.Marshal(refreshed.SkippedByReason); jerr == nil {
+			skippedJSON = string(b)
+		}
+	}
+	if err := database.SetWalkStats(tx, refreshed.IgnoredDirs, skippedJSON); err != nil {
+		writer.Close()
+		return Refreshed{}, err
 	}
 
 	if err := database.StampIndexedAt(tx); err != nil {
