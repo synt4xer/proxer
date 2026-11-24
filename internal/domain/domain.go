@@ -7,7 +7,6 @@ type SearchResultDB struct {
 	Content   string  `db:"content"`
 	Snippet   string  `db:"snippet"`
 	Score     float64 `db:"score"`
-	Total     int     `db:"total"`
 }
 
 // SkippedCounts breaks down RefreshSummary.Skipped by mutually exclusive file
