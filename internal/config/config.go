@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	Version          = "0.6.0"
+	Version          = "0.7.0"
 	DBFile           = ".proxer.db"
 	MaxFileSize      = 1024 * 1024 // 1 MB
 	MaxLineWidth     = 4096        // 4 KB
