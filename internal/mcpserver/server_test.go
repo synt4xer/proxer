@@ -71,17 +71,36 @@ func resultText(t *testing.T, res *mcp.CallToolResult) string {
 	return text.Text
 }
 
-func TestServerExposesFourTools(t *testing.T) {
+func TestServerExposesFiveToolsAndMetadata(t *testing.T) {
 	cs, _ := newTestSession(t)
+
+	initRes := cs.InitializeResult()
+	require.NotNil(t, initRes)
+	for _, toolName := range []string{"index", "search", "read", "edit", "status"} {
+		assert.Contains(t, initRes.Instructions, toolName)
+	}
+	assert.Contains(t, initRes.Instructions, "five tools")
 
 	list, err := cs.ListTools(context.Background(), nil)
 	require.NoError(t, err)
 
+	byName := make(map[string]*mcp.Tool, len(list.Tools))
 	names := make([]string, 0, len(list.Tools))
 	for _, tool := range list.Tools {
 		names = append(names, tool.Name)
+		byName[tool.Name] = tool
 	}
 	assert.ElementsMatch(t, []string{"index", "search", "read", "edit", "status"}, names)
+
+	assert.Contains(t, byName["search"].Description, "stale=true")
+	assert.Contains(t, byName["search"].Description, "hash")
+	assert.Contains(t, byName["read"].Description, "64 KB")
+	assert.Contains(t, byName["read"].Description, "numbered=true")
+	assert.Contains(t, byName["read"].Description, "next_start")
+	assert.Contains(t, byName["edit"].Description, "old_content")
+	assert.Contains(t, byName["edit"].Description, "occurrence")
+	assert.Contains(t, byName["edit"].Description, "reindex_failed")
+	assert.Contains(t, byName["status"].Description, "metadata")
 }
 
 func TestServerWorkflow(t *testing.T) {
@@ -234,4 +253,76 @@ func TestServerCoalescesRapidSearchRefreshes(t *testing.T) {
 	var afterCooldown domain.SearchResponse
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, callTool(t, cs, "search", map[string]any{"keyword": "cooldown"}))), &afterCooldown))
 	require.NotNil(t, afterCooldown.Refreshed, "search after cooldown expires must refresh again")
+}
+
+func TestServerReadNumberedAndAnchorEdit(t *testing.T) {
+	cs, root := newTestSession(t)
+	dupCode := "package main\n\nfunc a() int {\n\treturn 1\n}\n\nfunc b() int {\n\treturn 1\n}\n"
+	require.NoError(t, os.WriteFile(filepath.Join(root, "dup.go"), []byte(dupCode), 0o644))
+
+	readRes := callTool(t, cs, "read", map[string]any{
+		"filepath": "dup.go",
+		"start":    1,
+		"end":      10,
+		"numbered": true,
+	})
+	require.False(t, readRes.IsError)
+	var readOut domain.ReadResultJSON
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, readRes)), &readOut))
+	assert.Contains(t, readOut.Content, "1\tpackage main\n")
+	assert.Contains(t, readOut.Content, "4\t\treturn 1\n")
+
+	// Reject combining old_content with start/end.
+	badRes := callTool(t, cs, "edit", map[string]any{
+		"filepath":    "dup.go",
+		"start":       1,
+		"end":         2,
+		"old_content": "return 1",
+		"content":     "return 2",
+	})
+	assert.True(t, badRes.IsError)
+	assert.Contains(t, resultText(t, badRes), "cannot combine")
+
+	// Anchor edit with occurrence=2 returns new hash for chaining.
+	editRes := callTool(t, cs, "edit", map[string]any{
+		"filepath":    "dup.go",
+		"old_content": "\treturn 1",
+		"occurrence":  2,
+		"content":     "\treturn 2",
+		"hash":        readOut.Hash,
+	})
+	require.False(t, editRes.IsError)
+	var editOut domain.EditResultJSON
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, editRes)), &editOut))
+	assert.Equal(t, "success", editOut.Status)
+	assert.NotEmpty(t, editOut.Hash)
+	assert.NotEqual(t, readOut.Hash, editOut.Hash)
+
+	updated, err := os.ReadFile(filepath.Join(root, "dup.go"))
+	require.NoError(t, err)
+	assert.Equal(t, "package main\n\nfunc a() int {\n\treturn 1\n}\n\nfunc b() int {\n\treturn 2\n}\n", string(updated))
+}
+
+func TestServerRunStopsCleanlyOnContextCancel(t *testing.T) {
+	root := t.TempDir()
+	db, err := database.Open(filepath.Join(root, config.DBFile), database.OpenOptions{Chunking: indexer.Chunking()})
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+
+	srv := New(db, root, config.DefaultIgnoredDirs)
+	ctx, cancel := context.WithCancel(context.Background())
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- srv.Run(ctx, serverTransport)
+	}()
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "proxer-test", Version: "0"}, nil)
+	cs, err := client.Connect(ctx, clientTransport, nil)
+	require.NoError(t, err)
+
+	cancel()
+	_ = cs.Close()
+	assert.NoError(t, <-errCh)
 }

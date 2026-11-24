@@ -18,7 +18,7 @@ import (
 func newMCPCommand(state *cliState) *cobra.Command {
 	return &cobra.Command{
 		Use:   "mcp",
-		Short: "Serve index, search, read, and edit over the MCP stdio transport",
+		Short: "Serve index, search, read, edit, and status over the MCP stdio transport",
 		Args:  cobra.NoArgs,
 		Annotations: map[string]string{
 			manageDBAnnotation: "true",

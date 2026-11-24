@@ -1,5 +1,5 @@
-// Package mcpserver serves proxer's index, search, read, and edit operations
-// over the Model Context Protocol.
+// Package mcpserver serves proxer's index, search, read, edit, and status
+// operations over the Model Context Protocol.
 package mcpserver
 
 import (
@@ -17,9 +17,9 @@ const defaultRefreshCooldown = 2 * time.Second
 
 const Version = config.Version
 
-const instructions = `proxer indexes a local project and exposes four tools: index, search, read, and edit.
+const instructions = `proxer indexes a local project and exposes five tools: index, search, read, edit, and status.
 
-Paths passed to read and edit are relative to the project root; absolute paths inside the root are also accepted. A path that resolves outside the root is rejected, never clamped or rewritten. search refreshes the index before it queries, so files changed by other tools are found without calling index first; index is still there to pay that cost up front. Search to locate code, read before editing, and edit reindexes the file it changes.`
+Paths passed to read and edit are relative to the project root; absolute paths inside the root are also accepted. A path that resolves outside the root is rejected, never clamped or rewritten. search refreshes the index before it queries (with a short cooldown), so files changed by other tools are found without calling index first; index is still there to pay that cost up front. Search to locate code, read before editing (or use search's hash directly with anchor-mode edit), edit reindexes the file it changes, and status inspects index health and maintenance state.`
 
 type Options struct {
 	IgnoredDirs    []string
