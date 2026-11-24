@@ -113,6 +113,51 @@ func TestSearchResponseJSONContractAndOmitEmpty(t *testing.T) {
 		require.NoError(t, json.Unmarshal([]byte(raw), &obj))
 		assert.Equal(t, []string{"indexed_at", "refreshed", "results", "root", "total", "truncated"}, sortedKeys(obj))
 
+		results, ok := obj["results"].([]any)
+		require.True(t, ok)
+		require.Len(t, results, 1)
+		firstHit, ok := results[0].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, []string{"chunk", "filepath", "hash", "line", "match", "root", "snippet"}, sortedKeys(firstHit))
+
+		var out domain.SearchResponse
+		require.NoError(t, json.Unmarshal([]byte(raw), &out))
+		assert.Equal(t, in, out)
+	})
+
+	t.Run("omits line and hash when zero on path-only hit", func(t *testing.T) {
+		in := domain.SearchResponse{
+			Root:      "/repo",
+			Total:     1,
+			Truncated: false,
+			Results: []domain.SearchResultJSON{
+				{
+					Root:     "/repo",
+					Filepath: "notesonly.txt",
+					Chunk:    "1-1",
+					Line:     0,
+					Snippet:  "nothing matching inside",
+					Match:    "path",
+				},
+			},
+		}
+
+		raw, err := tools.EncodeJSON(in)
+		require.NoError(t, err)
+
+		var obj map[string]any
+		require.NoError(t, json.Unmarshal([]byte(raw), &obj))
+		results, ok := obj["results"].([]any)
+		require.True(t, ok)
+		require.Len(t, results, 1)
+		hit, ok := results[0].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, []string{"chunk", "filepath", "match", "root", "snippet"}, sortedKeys(hit))
+		_, hasLine := hit["line"]
+		_, hasHash := hit["hash"]
+		assert.False(t, hasLine, "line must be omitted when 0 on path-only hits")
+		assert.False(t, hasHash, "hash must be omitted when empty")
+
 		var out domain.SearchResponse
 		require.NoError(t, json.Unmarshal([]byte(raw), &out))
 		assert.Equal(t, in, out)
@@ -173,20 +218,79 @@ func TestReadResultJSONContract(t *testing.T) {
 }
 
 func TestEditResultJSONContract(t *testing.T) {
-	in := domain.EditResultJSON{
-		Status:  "success",
-		Message: "Successfully replaced lines 1 to 2 in main.go and re-indexed",
+	t.Run("minimal success omits reindex error fields", func(t *testing.T) {
+		in := domain.EditResultJSON{
+			Status:  "success",
+			Message: "Successfully replaced lines 1 to 2 in main.go and re-indexed",
+		}
+
+		raw, err := tools.EncodeJSON(in)
+		require.NoError(t, err)
+		assert.NotContains(t, raw, "\n")
+
+		var obj map[string]any
+		require.NoError(t, json.Unmarshal([]byte(raw), &obj))
+		assert.Equal(t, []string{"message", "status"}, sortedKeys(obj))
+
+		var out domain.EditResultJSON
+		require.NoError(t, json.Unmarshal([]byte(raw), &out))
+		assert.Equal(t, in, out)
+	})
+
+	t.Run("non-fatal reindex failure includes hash and reindex fields", func(t *testing.T) {
+		in := domain.EditResultJSON{
+			Status:        "success",
+			Message:       "Replaced lines 1 to 2 in main.go; post-write reindex failed",
+			Hash:          "abc123",
+			ReindexFailed: true,
+			ReindexError:  "database is locked",
+		}
+
+		raw, err := tools.EncodeJSON(in)
+		require.NoError(t, err)
+
+		var obj map[string]any
+		require.NoError(t, json.Unmarshal([]byte(raw), &obj))
+		assert.Equal(t, []string{"hash", "message", "reindex_error", "reindex_failed", "status"}, sortedKeys(obj))
+
+		var out domain.EditResultJSON
+		require.NoError(t, json.Unmarshal([]byte(raw), &out))
+		assert.Equal(t, in, out)
+	})
+}
+
+func TestStatusResponseJSONContract(t *testing.T) {
+	in := domain.StatusResponse{
+		Root:          "/repo",
+		DBPath:        "/repo/.proxer.db",
+		DBSizeBytes:   4096,
+		DBMode:        "0600",
+		SchemaVersion: "4",
+		FilesIndexed:  10,
+		ChunksIndexed: 25,
+		IgnoreSources: []string{"defaults"},
 	}
 
 	raw, err := tools.EncodeJSON(in)
 	require.NoError(t, err)
-	assert.NotContains(t, raw, "\n")
 
 	var obj map[string]any
 	require.NoError(t, json.Unmarshal([]byte(raw), &obj))
-	assert.Equal(t, []string{"message", "status"}, sortedKeys(obj))
+	assert.Equal(t, []string{
+		"chunks_indexed",
+		"db_mode",
+		"db_path",
+		"db_size_bytes",
+		"files_indexed",
+		"ignore_sources",
+		"ignored_dirs",
+		"index_sensitive",
+		"purge_pending",
+		"root",
+		"schema_version",
+	}, sortedKeys(obj))
 
-	var out domain.EditResultJSON
+	var out domain.StatusResponse
 	require.NoError(t, json.Unmarshal([]byte(raw), &out))
 	assert.Equal(t, in, out)
 }
