@@ -1,8 +1,8 @@
 # Installation & Harness Integration
 
 Proxer integrates with coding agent harnesses in two ways:
-1. **CLI / Agent Skill** — invoked via shell as `proxer` (on `PATH`) or from `.agents/skills/proxer/scripts/proxer` (`proxer.exe` on Windows).
-2. **MCP Server (`proxer mcp`)** — exposes `index`, `search`, `read`, `edit`, and `status` over stdio JSON-RPC.
+1. **Agent Skill (CLI)** — installed into a **project** skill directory (`.agents/skills/proxer/`) or a **harness** skill directory (`~/.agents/skills/proxer/`, `~/.claude/skills/proxer/`, `~/.cursor/skills/proxer/`, etc.), with `SKILL.md` at the skill root and the binary at `scripts/proxer` (`scripts/proxer.exe` on Windows).
+2. **MCP Server (`proxer mcp`)** — exposes `index`, `search`, `read`, `edit`, and `status` over stdio JSON-RPC, running either the installed project/harness skill binary or a binary placed in your harness's MCP directory.
 
 Both surfaces share the same indexing engine, path confinement, and pre-search refresh behavior.
 
@@ -27,55 +27,60 @@ Each archive contains:
 
 SHA-256 digests for all archives are published alongside each release in `checksums.txt`.
 
-#### macOS & Linux
+### Choosing an Install Directory
 
-**Standalone binary (on `PATH`):**
+Proxer detects its install location automatically to decide where to store the SQLite index (`--db` or `PROXER_DB` always overrides this):
+
+| Install Target | Layout | Automatic DB Routing |
+| --- | --- | --- |
+| **Project** | `<project>/.agents/skills/proxer/{SKILL.md,scripts/proxer[.exe]}` | `<project>/.proxer.db` (`install_mode: "project"`) |
+| **Harness (user-level)** | `<home-hidden-or-config>/.../skills/proxer/{SKILL.md,scripts/proxer[.exe]}` (e.g. `~/.agents/skills/proxer`, `~/.claude/skills/proxer`, `~/.cursor/skills/proxer`, or `PROXER_SKILL_DIR`) | `<skill-dir>/database/<repo>-<hash12>.db` (`install_mode: "harness"`) |
+| **MCP-only directory** | `<mcp-dir>/proxer[.exe]` (e.g. `~/.mcp/proxer/proxer[.exe]`) | `<project>/.proxer.db` if the project has one, otherwise `~/.agents/skills/proxer/database/<repo>-<hash12>.db` |
+
+> Installing the binary inside a `skills/proxer` directory under your home/config directory is what enables automatic per-repo DB isolation in harness mode without creating `.proxer.db` inside every repository.
+
+---
+
+### Option A: Project or Harness Skill Install (Recommended)
+
+#### macOS & Linux
 
 ```bash
 VERSION=0.7.0
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/')
 ARCHIVE="proxer_${VERSION}_${OS}_${ARCH}.tar.gz"
+BASE_URL="https://github.com/synt4xer/proxer/releases/download/v${VERSION}"
 
-curl -sSLO "https://github.com/synt4xer/proxer/releases/download/v${VERSION}/${ARCHIVE}"
-curl -sSLO "https://github.com/synt4xer/proxer/releases/download/v${VERSION}/checksums.txt"
+# Pick ONE target:
+#   Project: SKILL_DIR="/path/to/your-project/.agents/skills/proxer"
+#   Harness: SKILL_DIR="$HOME/.agents/skills/proxer"   # or $HOME/.claude/skills/proxer, $HOME/.cursor/skills/proxer
+SKILL_DIR="/path/to/your-project/.agents/skills/proxer"
 
-# Verify SHA-256 checksum (macOS: shasum -a 256, Linux: sha256sum)
-grep " ${ARCHIVE}$" checksums.txt | (command -v sha256sum >/dev/null && sha256sum -c - || shasum -a 256 -c -)
+tmp=$(mktemp -d)
+curl -sSL "${BASE_URL}/${ARCHIVE}" -o "$tmp/${ARCHIVE}"
+curl -sSL "${BASE_URL}/checksums.txt" -o "$tmp/checksums.txt"
 
-tar -xzf "${ARCHIVE}" proxer
-mkdir -p "$HOME/.local/bin"
-mv proxer "$HOME/.local/bin/proxer"
-rm -f "${ARCHIVE}" checksums.txt
+# Verify SHA-256 checksum (Linux: sha256sum, macOS: shasum -a 256)
+(cd "$tmp" && grep " ${ARCHIVE}$" checksums.txt | (command -v sha256sum >/dev/null && sha256sum -c - || shasum -a 256 -c -))
+
+tar -xzf "$tmp/${ARCHIVE}" -C "$tmp"
+mkdir -p "$SKILL_DIR/scripts"
+cp "$tmp/skills/proxer/SKILL.md" "$SKILL_DIR/SKILL.md"
+cp "$tmp/proxer" "$SKILL_DIR/scripts/proxer"
+chmod +x "$SKILL_DIR/scripts/proxer"
+rm -rf "$tmp"
+
+"$SKILL_DIR/scripts/proxer" --version
 ```
 
 On macOS, if Gatekeeper blocks an unsigned downloaded binary, clear the quarantine attribute once:
 
 ```bash
-xattr -d com.apple.quarantine "$HOME/.local/bin/proxer"
-```
-
-**Agent Skill install from a release archive (no Go toolchain required):**
-
-```bash
-# Set DEST to a project root, or $HOME for a user-level install shared across repos
-DEST=/path/to/your-project
-VERSION=0.7.0
-OS=$(uname -s | tr '[:upper:]' '[:lower:]')
-ARCH=$(uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/')
-
-tmp=$(mktemp -d)
-curl -sSL "https://github.com/synt4xer/proxer/releases/download/v${VERSION}/proxer_${VERSION}_${OS}_${ARCH}.tar.gz" | tar -xz -C "$tmp"
-mkdir -p "$DEST/.agents/skills/proxer/scripts"
-cp "$tmp/skills/proxer/SKILL.md" "$DEST/.agents/skills/proxer/SKILL.md"
-cp "$tmp/proxer" "$DEST/.agents/skills/proxer/scripts/proxer"
-chmod +x "$DEST/.agents/skills/proxer/scripts/proxer"
-rm -rf "$tmp"
+xattr -d com.apple.quarantine "$SKILL_DIR/scripts/proxer"
 ```
 
 #### Windows (PowerShell)
-
-**Standalone binary (on `PATH`):**
 
 ```powershell
 $Version = "0.7.0"
@@ -83,53 +88,79 @@ $Arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "amd64" 
 $Archive = "proxer_${Version}_windows_${Arch}.zip"
 $BaseUrl = "https://github.com/synt4xer/proxer/releases/download/v$Version"
 
-Invoke-WebRequest -Uri "$BaseUrl/$Archive" -OutFile $Archive
-Invoke-WebRequest -Uri "$BaseUrl/checksums.txt" -OutFile checksums.txt
+# Pick ONE target:
+#   Project: $SkillDir = "C:\path\to\your-project\.agents\skills\proxer"
+#   Harness: $SkillDir = "$HOME\.agents\skills\proxer"   # or $HOME\.claude\skills\proxer, $HOME\.cursor\skills\proxer
+$SkillDir = "C:\path\to\your-project\.agents\skills\proxer"
+
+$Tmp = Join-Path $env:TEMP "proxer-install"
+New-Item -ItemType Directory -Force -Path $Tmp | Out-Null
+Invoke-WebRequest -Uri "$BaseUrl/$Archive" -OutFile (Join-Path $Tmp $Archive)
+Invoke-WebRequest -Uri "$BaseUrl/checksums.txt" -OutFile (Join-Path $Tmp "checksums.txt")
 
 # Verify SHA-256 checksum
-$Expected = (Select-String -Path checksums.txt -Pattern " $Archive$").Line.Split(" ", [System.StringSplitOptions]::RemoveEmptyEntries)[0]
-$Actual = (Get-FileHash -Algorithm SHA256 $Archive).Hash.ToLower()
+$Expected = (Select-String -Path (Join-Path $Tmp "checksums.txt") -Pattern " $Archive$").Line.Split(" ", [System.StringSplitOptions]::RemoveEmptyEntries)[0]
+$Actual = (Get-FileHash -Algorithm SHA256 (Join-Path $Tmp $Archive)).Hash.ToLower()
 if ($Actual -ne $Expected) { throw "Checksum mismatch: expected $Expected, got $Actual" }
 
-$InstallDir = "$HOME\.local\bin"
-New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-Expand-Archive -Path $Archive -DestinationPath "$env:TEMP\proxer-extract" -Force
-Copy-Item "$env:TEMP\proxer-extract\proxer.exe" "$InstallDir\proxer.exe" -Force
-Remove-Item -Recurse -Force "$env:TEMP\proxer-extract", $Archive, checksums.txt
+Expand-Archive -Path (Join-Path $Tmp $Archive) -DestinationPath $Tmp -Force
+New-Item -ItemType Directory -Force -Path (Join-Path $SkillDir "scripts") | Out-Null
+Copy-Item (Join-Path $Tmp "skills\proxer\SKILL.md") (Join-Path $SkillDir "SKILL.md") -Force
+Copy-Item (Join-Path $Tmp "proxer.exe") (Join-Path $SkillDir "scripts\proxer.exe") -Force
+Remove-Item -Recurse -Force $Tmp
+
+& (Join-Path $SkillDir "scripts\proxer.exe") --version
 ```
 
-Add `$HOME\.local\bin` to your User `PATH` (or run `"$HOME\.local\bin\proxer.exe"` directly), then verify with `proxer.exe --version`.
+---
 
-**Agent Skill install from a release archive:**
+### Option B: MCP-Only Directory Install
+
+If you already installed the Agent Skill above, you do **not** need a second binary — point your MCP config directly at `<SKILL_DIR>/scripts/proxer` (or `proxer.exe`).
+
+If you only want the MCP server binary in a dedicated MCP directory (without `SKILL.md`):
+
+**macOS & Linux:**
+
+```bash
+VERSION=0.7.0
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+ARCH=$(uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/')
+MCP_DIR="$HOME/.mcp/proxer" # or your harness's MCP servers directory
+
+mkdir -p "$MCP_DIR"
+curl -sSL "https://github.com/synt4xer/proxer/releases/download/v${VERSION}/proxer_${VERSION}_${OS}_${ARCH}.tar.gz" | tar -xz -C "$MCP_DIR" proxer
+chmod +x "$MCP_DIR/proxer"
+```
+
+**Windows (PowerShell):**
 
 ```powershell
-# Set $Dest to a project root, or $HOME for a user-level install shared across repos
-$Dest = "C:\path\to\your-project"
 $Version = "0.7.0"
 $Arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "amd64" }
 $Archive = "proxer_${Version}_windows_${Arch}.zip"
+$McpDir = "$HOME\.mcp\proxer" # or your harness's MCP servers directory
 
-Invoke-WebRequest -Uri "https://github.com/synt4xer/proxer/releases/download/v$Version/$Archive" -OutFile $Archive
-Expand-Archive -Path $Archive -DestinationPath "$env:TEMP\proxer-extract" -Force
-
-$SkillDir = Join-Path $Dest ".agents\skills\proxer"
-New-Item -ItemType Directory -Force -Path (Join-Path $SkillDir "scripts") | Out-Null
-Copy-Item "$env:TEMP\proxer-extract\skills\proxer\SKILL.md" (Join-Path $SkillDir "SKILL.md") -Force
-Copy-Item "$env:TEMP\proxer-extract\proxer.exe" (Join-Path $SkillDir "scripts\proxer.exe") -Force
-Remove-Item -Recurse -Force "$env:TEMP\proxer-extract", $Archive
+New-Item -ItemType Directory -Force -Path $McpDir | Out-Null
+Invoke-WebRequest -Uri "https://github.com/synt4xer/proxer/releases/download/v$Version/$Archive" -OutFile "$env:TEMP\$Archive"
+Expand-Archive -Path "$env:TEMP\$Archive" -DestinationPath "$env:TEMP\proxer-mcp" -Force
+Copy-Item "$env:TEMP\proxer-mcp\proxer.exe" (Join-Path $McpDir "proxer.exe") -Force
+Remove-Item -Recurse -Force "$env:TEMP\proxer-mcp", "$env:TEMP\$Archive"
 ```
 
-### Build from Source
+---
 
-Requires Go 1.27+ (and `make` for the Agent Skill helper target):
+### Option C: Build from Source
+
+Requires Go 1.27+ and `make`:
 
 ```bash
-# Install standalone binary onto GOPATH/bin
-CGO_ENABLED=0 go install github.com/synt4xer/proxer/cmd/proxer@latest
-
-# Or build locally and install the Agent Skill into a project (or DEST=$HOME)
 make build
+# Project install:
 make install DEST=/path/to/your-project
+
+# Or user-level harness install ($HOME/.agents/skills/proxer/):
+make install DEST="$HOME"
 ```
 
 `make install` copies `SKILL.md` and the binary into `<DEST>/.agents/skills/proxer/` without modifying `.gitignore` or project configs.
@@ -138,72 +169,76 @@ make install DEST=/path/to/your-project
 
 ## 2. How to Use (CLI & Agent Skill)
 
-`skills/proxer/SKILL.md` follows the [Agent Skills specification](https://agentskills.io/specification). Any harness that discovers `.agents/skills/<name>/SKILL.md` (such as Claude Code or Pi) picks it up automatically.
+`skills/proxer/SKILL.md` follows the [Agent Skills specification](https://agentskills.io/specification). Any harness that discovers `.agents/skills/<name>/SKILL.md` (or its own `<harness>/skills/<name>/SKILL.md`, such as Claude Code, Cursor, or Pi) picks it up automatically.
 
 All commands write JSON to stdout and errors to stderr with a non-zero exit code.
 
 ### Common Commands
 
+The examples below assume a **project-local install**. If you installed into a **harness directory** (e.g., `$HOME/.agents/skills/proxer`), substitute `$HOME/.agents/skills/proxer/scripts/proxer` (or `$HOME\.agents\skills\proxer\scripts\proxer.exe`) and run from the target repo or pass `--root <path>` / `PROXER_ROOT`.
+
 **macOS & Linux:**
 
 ```bash
+PROXER=./.agents/skills/proxer/scripts/proxer
+
 # Search (auto-refreshes index before querying)
-proxer search -k "authMiddleware" -n 5 --kind code
+"$PROXER" search -k "authMiddleware" -n 5 --kind code
 
 # Read a bounded line range with line numbers and full-file SHA-256 hash
-proxer read -f "internal/auth.go" -s 40 -e 70 --numbered
+"$PROXER" read -f "internal/auth.go" -s 40 -e 70 --numbered
 
 # Line-range edit with --hash guard
-proxer edit -f "internal/auth.go" -s 52 -e 58 --hash "<sha256>" <<'EOF'
+"$PROXER" edit -f "internal/auth.go" -s 52 -e 58 --hash "<sha256>" <<'EOF'
 func AuthMiddleware(next http.Handler) http.Handler {
 	return requireSession(next)
 }
 EOF
 
 # Anchor-mode edit (replaces exact --old block)
-printf '%s' 'return requireSession(next)' | proxer edit -f "internal/auth.go" --old "return oldHandler(next)" --hash "<sha256>"
+printf '%s' 'return requireSession(next)' | "$PROXER" edit -f "internal/auth.go" --old "return oldHandler(next)" --hash "<sha256>"
 
 # Inspect index health, size, and DB routing
-proxer status
+"$PROXER" status
 ```
 
 **Windows (PowerShell):**
 
 ```powershell
+$Proxer = ".\.agents\skills\proxer\scripts\proxer.exe"
+
 # Search
-proxer.exe search -k "authMiddleware" -n 5 --kind code
+& $Proxer search -k "authMiddleware" -n 5 --kind code
 
 # Read
-proxer.exe read -f "internal/auth.go" -s 40 -e 70 --numbered
+& $Proxer read -f "internal/auth.go" -s 40 -e 70 --numbered
 
 # Line-range edit with --hash guard (line-range mode trims trailing CRLF)
 @'
 func AuthMiddleware(next http.Handler) http.Handler {
 	return requireSession(next)
 }
-'@ | proxer.exe edit -f "internal/auth.go" -s 52 -e 58 --hash "<sha256>"
+'@ | & $Proxer edit -f "internal/auth.go" -s 52 -e 58 --hash "<sha256>"
 
 # Inspect index health
-proxer.exe status
+& $Proxer status
 ```
 
 > **Windows tip:** PowerShell pipelines append a trailing newline when piping strings to native commands. Line-range mode (`-s`/`-e`) trims trailing `\r\n` automatically; for verbatim `--old` anchor edits on Windows, prefer the MCP `edit` tool (which passes `content` as a JSON field).
-
-If you installed Proxer as a project-local Agent Skill rather than onto `PATH`, replace `proxer` with `./.agents/skills/proxer/scripts/proxer` (macOS/Linux) or `.\.agents\skills\proxer\scripts\proxer.exe` (Windows). Use `--root <path>` (or `PROXER_ROOT`) to target a repository outside the current directory.
 
 ---
 
 ## 3. MCP Server Setup
 
-Register `proxer mcp` in your harness MCP config (e.g., `.pi/mcp.json`, Claude, or Cursor).
+Register `proxer mcp` in your harness MCP config (e.g., `.pi/mcp.json`, `.mcp.json`, Claude, or Cursor).
 
-**When `proxer` is on `PATH` (macOS, Linux, and Windows):**
+**Project-local install:**
 
 ```json
 {
   "mcpServers": {
     "proxer": {
-      "command": "proxer",
+      "command": ".agents/skills/proxer/scripts/proxer",
       "args": ["mcp", "--root", "."],
       "cwd": "."
     }
@@ -211,24 +246,30 @@ Register `proxer mcp` in your harness MCP config (e.g., `.pi/mcp.json`, Claude, 
 }
 ```
 
-**When installed as a project-local Agent Skill:**
+On Windows, set `"command": ".agents/skills/proxer/scripts/proxer.exe"`.
 
-- macOS / Linux: set `"command": ".agents/skills/proxer/scripts/proxer"`
-- Windows: set `"command": ".agents/skills/proxer/scripts/proxer.exe"`
+**Harness-level or dedicated MCP directory install:**
 
-Or via CLI in harnesses that support it:
+JSON MCP configs generally do not expand `~` or `$HOME`, so use the full binary path:
+
+- **macOS / Linux (harness):** `"/Users/<you>/.agents/skills/proxer/scripts/proxer"` (or `"/home/<you>/..."`)
+- **macOS / Linux (MCP dir):** `"/Users/<you>/.mcp/proxer/proxer"`
+- **Windows (harness):** `"C:\\Users\\<you>\\.agents\\skills\\proxer\\scripts\\proxer.exe"`
+- **Windows (MCP dir):** `"C:\\Users\\<you>\\.mcp\\proxer\\proxer.exe"`
+
+Or register via CLI in harnesses that support it:
 
 ```bash
-# Pi (with proxer on PATH)
-pi mcp add -l proxer -- proxer mcp --root .
-
-# Pi (project-local Agent Skill on macOS/Linux)
+# Pi (project-local install on macOS/Linux)
 pi mcp add -l proxer -- .agents/skills/proxer/scripts/proxer mcp --root .
+
+# Pi (harness-level install on macOS/Linux)
+pi mcp add -l proxer -- "$HOME/.agents/skills/proxer/scripts/proxer" mcp --root .
 ```
 
 ### Server Behavior
 
-- **Root & DB routing:** Resolves root via `--root` → `PROXER_ROOT` → working directory. Uses `<root>/.proxer.db` for project-local installs, or `<skillDir>/database/<name>-<hash12>.db` for harness-level installs (override with `--db` or `PROXER_DB`).
+- **Root & DB routing:** Resolves root via `--root` → `PROXER_ROOT` → working directory. Uses `<root>/.proxer.db` for project-local installs, or `<skillDir>/database/<name>-<hash12>.db` for harness-level and MCP-only installs (override with `--db` or `PROXER_DB`).
 - **Refresh cooldown:** `search` auto-refreshes before querying with a 2-second cooldown (invalidated immediately after `edit`). Set `PROXER_NO_REFRESH=1` in the server environment to force read-only searches.
 - **Read-only fallback:** If the DB is read-only on disk, `proxer mcp` opens it in read-only mode so `search` and `status` still work (marking `search` responses with `"stale": true`).
 - **Stdio isolation:** Writes only JSON-RPC to stdout; errors go to stderr.
@@ -257,5 +298,5 @@ pi mcp add -l proxer -- .agents/skills/proxer/scripts/proxer mcp --root .
 | --- | --- |
 | CLI (`proxer`) | `index`, `search`, `read` (`--numbered`, 64 KB cap), `edit` (range + `--old` anchor + `--hash`), `status`/`doctor` (`--vacuum`, `--prune`) |
 | MCP stdio (`proxer mcp`) | `index`, `search`, `read`, `edit`, `status`, 2s refresh cooldown, read-only fallback |
-| Agent Skill (`SKILL.md`) | Project-local and user-level (`$HOME`) install via release archive or `make install` |
+| Agent Skill (`SKILL.md`) | Project-local (`.agents/skills/proxer/`) and harness-level (`~/.agents/skills/proxer/`, `~/.claude/skills/proxer/`, etc.) installs via release archive or `make install` |
 | Release Artifacts | CGO-free static cross-builds for `linux`, `darwin`, and `windows` (`amd64` + `arm64`) via GoReleaser |
