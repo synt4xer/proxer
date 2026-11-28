@@ -12,8 +12,10 @@ import (
 	"strings"
 )
 
+// Version is the build version; GoReleaser overrides it via -ldflags -X on release builds.
+var Version = "0.7.0"
+
 const (
-	Version          = "0.7.0"
 	DBFile           = ".proxer.db"
 	MaxFileSize      = 1024 * 1024 // 1 MB
 	MaxLineWidth     = 4096        // 4 KB
