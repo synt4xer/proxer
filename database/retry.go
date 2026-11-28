@@ -2,6 +2,7 @@ package database
 
 import (
 	"fmt"
+	"math/rand/v2"
 	"time"
 )
 
@@ -36,7 +37,7 @@ func WithRetry(cfg RetryConfig, fn func() error) error {
 		}
 
 		if attempt < cfg.MaxAttempts-1 {
-			time.Sleep(wait)
+			time.Sleep(jitterWait(wait))
 			wait = minDuration(wait*2, cfg.MaxWait)
 		}
 	}
@@ -49,6 +50,16 @@ func minDuration(a, b time.Duration) time.Duration {
 		return a
 	}
 	return b
+}
+
+// jitterWait spreads retries in [d/2, d) so processes that hit the same
+// SQLITE_BUSY at the same instant do not retry in lockstep forever.
+func jitterWait(d time.Duration) time.Duration {
+	half := d / 2
+	if half <= 0 {
+		return d
+	}
+	return half + time.Duration(rand.Int64N(int64(half)))
 }
 
 // IsBusyError returns true if err is a SQLite busy/locked error.
