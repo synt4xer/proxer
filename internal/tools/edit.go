@@ -8,17 +8,23 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/synt4xer/proxer/database"
 	"github.com/synt4xer/proxer/internal/config"
 	"github.com/synt4xer/proxer/internal/domain"
+	"github.com/synt4xer/proxer/internal/filelock"
 	"github.com/synt4xer/proxer/internal/indexer"
 )
 
 // reindexFileContent is overridden in tests to simulate post-write reindex failures.
 var reindexFileContent = indexer.ReindexFileContentWithOptions
+
+// editLockTimeout bounds how long an edit waits for another proxer writer to
+// release the project lock before failing, so a stuck peer cannot hang an agent.
+const editLockTimeout = 10 * time.Second
 
 type EditOptions struct {
 	IgnoredDirs    []string
@@ -60,6 +66,15 @@ func PerformEditWithOptions(ctx context.Context, db *sqlx.DB, root, path string,
 	if _, err := os.Stat(resolved); os.IsNotExist(err) {
 		return domain.EditResultJSON{}, fmt.Errorf("file '%s' not found", path)
 	}
+
+	// Serialize the whole read-hash-check-write cycle across processes. The
+	// hash guard is only meaningful if no other writer can land between the
+	// check and the rename, so the lock is taken before the file is read.
+	lock, err := filelock.Acquire(root, editLockTimeout)
+	if err != nil {
+		return domain.EditResultJSON{}, fmt.Errorf("failed to acquire write lock: %w", err)
+	}
+	defer lock.Release()
 
 	contentBytes, err := os.ReadFile(resolved)
 	if err != nil {
@@ -106,9 +121,11 @@ func PerformEditWithOptions(ctx context.Context, db *sqlx.DB, root, path string,
 	}
 
 	newHash := indexer.ContentHash(finalBytes)
-	err = reindexFileContent(db, root, resolved, finalBytes, indexer.IndexOptions{
-		IgnoredDirs:    opts.IgnoredDirs,
-		IndexSensitive: opts.IndexSensitive,
+	err = database.WithRetry(database.DefaultRetryConfig, func() error {
+		return reindexFileContent(db, root, resolved, finalBytes, indexer.IndexOptions{
+			IgnoredDirs:    opts.IgnoredDirs,
+			IndexSensitive: opts.IndexSensitive,
+		})
 	})
 	if err != nil {
 		return domain.EditResultJSON{

@@ -67,13 +67,3 @@ func IsReadOnlyError(err error) bool {
 		strings.Contains(msg, "read-only") ||
 		strings.Contains(msg, "permission denied")
 }
-
-func IsBusyError(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "sqlite_busy") ||
-		strings.Contains(msg, "database is locked") ||
-		strings.Contains(msg, "database is busy")
-}

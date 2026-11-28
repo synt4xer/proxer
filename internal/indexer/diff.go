@@ -15,6 +15,7 @@ import (
 	"github.com/synt4xer/proxer/database"
 	"github.com/synt4xer/proxer/internal/config"
 	"github.com/synt4xer/proxer/internal/domain"
+	"github.com/synt4xer/proxer/internal/filelock"
 	"github.com/synt4xer/proxer/internal/filesystem"
 )
 
@@ -131,7 +132,7 @@ func (d *Diff) refreshedBase() Refreshed {
 
 func isInternalDBFile(rel string) bool {
 	switch rel {
-	case config.DBFile, config.DBFile + "-wal", config.DBFile + "-shm", config.DBFile + "-journal":
+	case config.DBFile, config.DBFile + "-wal", config.DBFile + "-shm", config.DBFile + "-journal", filelock.LockFilename:
 		return true
 	}
 	return false
