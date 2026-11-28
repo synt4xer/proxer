@@ -3,6 +3,7 @@ package database
 import (
 	"fmt"
 	"math/rand/v2"
+	"strings"
 	"time"
 )
 
@@ -68,20 +69,7 @@ func IsBusyError(err error) bool {
 		return false
 	}
 	msg := err.Error()
-	return contains(msg, "SQLITE_BUSY") ||
-		contains(msg, "database is locked") ||
-		contains(msg, "database is busy")
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && indexOf(s, substr) >= 0
-}
-
-func indexOf(s, substr string) int {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return i
-		}
-	}
-	return -1
+	return strings.Contains(msg, "SQLITE_BUSY") ||
+		strings.Contains(msg, "database is locked") ||
+		strings.Contains(msg, "database is busy")
 }
