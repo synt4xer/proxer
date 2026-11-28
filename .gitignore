@@ -33,6 +33,9 @@ build/
 # local binary produced by `make build`
 /bin/
 
+# GoReleaser output
+/dist/
+
 # proxer index artifacts
 .proxer.db
 .proxer.db-shm
