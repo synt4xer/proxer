@@ -13,7 +13,7 @@ make install DEST=/path/to/your-project
 ```
 
 - `make build` produces a static CGO-free binary (`./bin/proxer`) using `modernc.org/sqlite`.
-- `make install DEST=...` copies `SKILL.md` and the binary into `<DEST>/.agents/skills/proxer/` without modifying `.gitignore` or project configs. Add `.proxer.db*` to `.gitignore` or `.git/info/exclude` if desired.
+- `make install DEST=...` copies `SKILL.md` and the binary into `<DEST>/.agents/skills/proxer/` without modifying `.gitignore` or project configs. Add `.proxer.db*` and `.proxer.lock` to `.gitignore` or `.git/info/exclude` if desired.
 - For a user-level install shared across repos, run `make install DEST=$HOME`.
 
 ---
@@ -138,7 +138,10 @@ EOF
 - Writes atomically via temp file + rename and reindexes **only** the edited file.
 - `--hash` rejects the write if the file changed since `read` or `search`.
 - Refuses edits targeting truncated lines (>4,096 chars) or containing ` [truncated]`.
+- Concurrent writers are serialized by an advisory lock on `<root>/.proxer.lock`, held for the whole read-verify-write-reindex cycle. A second writer waits up to 10 s and then fails with `failed to acquire write lock`; without the lock the hash check would be a check-then-write race and both writers could believe they were current. The file is harmless residue and can be deleted when no edit is running.
 - Returns `{"status": "...", "message": "...", "hash": "<new-sha256>"}`.
+
+> The lock covers a single machine and a local filesystem. On NFS/SMB, or between containers sharing a mount, `flock` is not reliable, so two agents editing the same file can still lose one update; point each agent at a distinct working copy in that case.
 
 ### `status` (`doctor`)
 
