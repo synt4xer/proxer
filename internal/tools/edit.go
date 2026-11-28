@@ -246,9 +246,9 @@ func applyAnchorEdit(path string, contentBytes []byte, oldContent, newContent st
 // the write is in flight sees a partial file and can splice garbage into it.
 // The rename makes the new content appear in one step.
 //
-// Two processes editing the same file still race on the content they read: the
-// last writer wins. Serializing that would need a lock, which is out of scope
-// here; preventing the corruption is not.
+// Two processes editing the same file are serialized by the caller's lock, so
+// the check-then-write cycle cannot interleave; this function only guarantees
+// that no reader ever observes a half-written file.
 func writeFileAtomically(path string, content []byte) error {
 	// A symlink is edited through its target, so the link itself must survive
 	// the replacement.
