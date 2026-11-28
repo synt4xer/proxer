@@ -153,6 +153,12 @@ func computeDiff(db *sqlx.DB, rootPath string, opts IndexOptions) (*Diff, error)
 
 	walkErr := filepath.WalkDir(rootPath, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
+			// The root failing to open is not a per-entry problem: swallowing it
+			// would report an empty tree and make applyDiff drop every row, so a
+			// typo in --root would silently wipe the index.
+			if path == rootPath {
+				return fmt.Errorf("failed to walk the project root %s: %w", rootPath, err)
+			}
 			return nil
 		}
 
