@@ -46,7 +46,7 @@ Proxer detects its install location automatically to decide where to store the S
 #### macOS & Linux
 
 ```bash
-VERSION=0.8.0
+VERSION=0.7.2
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/')
 ARCHIVE="proxer_${VERSION}_${OS}_${ARCH}.tar.gz"
@@ -83,7 +83,7 @@ xattr -d com.apple.quarantine "$SKILL_DIR/scripts/proxer"
 #### Windows (PowerShell)
 
 ```powershell
-$Version = "0.8.0"
+$Version = "0.7.2"
 $Arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "amd64" }
 $Archive = "proxer_${Version}_windows_${Arch}.zip"
 $BaseUrl = "https://github.com/synt4xer/proxer/releases/download/v$Version"
@@ -123,7 +123,7 @@ If you only want the MCP server binary in a dedicated MCP directory (without `SK
 **macOS & Linux:**
 
 ```bash
-VERSION=0.8.0
+VERSION=0.7.2
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/')
 MCP_DIR="$HOME/.mcp/proxer" # or your harness's MCP servers directory
@@ -136,7 +136,7 @@ chmod +x "$MCP_DIR/proxer"
 **Windows (PowerShell):**
 
 ```powershell
-$Version = "0.8.0"
+$Version = "0.7.2"
 $Arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "amd64" }
 $Archive = "proxer_${Version}_windows_${Arch}.zip"
 $McpDir = "$HOME\.mcp\proxer" # or your harness's MCP servers directory

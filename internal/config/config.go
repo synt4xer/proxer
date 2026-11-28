@@ -15,7 +15,7 @@ import (
 // Version is the build version; GoReleaser overrides it via -ldflags -X on release builds.
 // Keep it equal to the release tag (minus the "v"): `make build` binaries report
 // this value, so drift makes a local build claim to be a different release.
-var Version = "0.8.0"
+var Version = "0.7.2"
 
 const (
 	DBFile           = ".proxer.db"

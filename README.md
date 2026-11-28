@@ -48,7 +48,7 @@ Choose where to install Proxer based on how your agent harness runs it:
 ### macOS & Linux
 
 ```bash
-VERSION=0.8.0
+VERSION=0.7.2
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/')
 
@@ -70,7 +70,7 @@ rm -rf "$tmp"
 ### Windows (PowerShell)
 
 ```powershell
-$Version = "0.8.0"
+$Version = "0.7.2"
 $Arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "amd64" }
 $Archive = "proxer_${Version}_windows_${Arch}.zip"
 
