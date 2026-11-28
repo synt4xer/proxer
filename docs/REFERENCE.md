@@ -190,12 +190,12 @@ Environment variables:
 
 ## 6. Release Gate Checklist
 
-Every release tag (`v*`, enforced by `.github/workflows/ci.yml`) must pass:
+Every release tag (`v*`, enforced by `.github/workflows/ci.yml` and published by `.github/workflows/release.yml` via GoReleaser) must pass:
 
 1. `test -z "$(gofmt -l .)"`
 2. `go vet ./...`
 3. `CGO_ENABLED=0 go build ./...`
 4. `CGO_ENABLED=0 go test ./...` and `go test -race ./...`
 5. Fresh benchmark run on a fresh binary + fresh `.proxer.db` (see [BENCHMARKS.md](BENCHMARKS.md) §6)
-6. Verify CLI, MCP stdio, and Agent Skill flows (see [INTEGRATION.md](INTEGRATION.md) §3)
-7. Bump `config.Version` (`internal/config/config.go`) per semver and publish GitHub Release notes
+6. Verify CLI, MCP stdio, and Agent Skill flows (see [INTEGRATION.md](INTEGRATION.md) §4)
+7. Bump `config.Version` (`internal/config/config.go`) per semver, optionally dry-run locally with `goreleaser release --snapshot --clean`, then tag and push (`git tag vX.Y.Z && git push origin vX.Y.Z`) to publish Windows, Linux, and macOS archives to GitHub Releases
