@@ -15,8 +15,6 @@ import (
 
 const defaultRefreshCooldown = 2 * time.Second
 
-const Version = config.Version
-
 const instructions = `proxer indexes a local project and exposes five tools: index, search, read, edit, and status.
 
 Paths passed to read and edit are relative to the project root; absolute paths inside the root are also accepted. A path that resolves outside the root is rejected, never clamped or rewritten. search refreshes the index before it queries (with a short cooldown), so files changed by other tools are found without calling index first; index is still there to pay that cost up front. Search to locate code, read before editing (or use search's hash directly with anchor-mode edit), edit reindexes the file it changes, and status inspects index health and maintenance state.`
@@ -71,7 +69,7 @@ func NewWithOptions(db *sqlx.DB, root string, opts Options) *Server {
 		now:             time.Now,
 	}
 	s.mcp = mcp.NewServer(
-		&mcp.Implementation{Name: "proxer", Version: Version},
+		&mcp.Implementation{Name: "proxer", Version: config.Version},
 		&mcp.ServerOptions{Instructions: instructions},
 	)
 	s.registerTools()
