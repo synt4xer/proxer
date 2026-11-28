@@ -1,6 +1,7 @@
 package filelock
 
 import (
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -130,4 +131,26 @@ func TestJitterSpreadsDelays(t *testing.T) {
 		seen[j] = struct{}{}
 	}
 	assert.Greater(t, len(seen), 1, "jitter must produce varying delays, not a constant")
+}
+
+func TestAcquireFailsWhenRootIsUnwritable(t *testing.T) {
+	// A regular file where the root directory should be makes OpenFile fail,
+	// exercising the branch that reports a broken lock path.
+	missingRoot := filepath.Join(t.TempDir(), "not-a-dir")
+	require.NoError(t, os.WriteFile(missingRoot, []byte("x"), 0o600))
+
+	lock, err := Acquire(missingRoot, time.Second)
+
+	require.Error(t, err)
+	assert.Nil(t, lock)
+	assert.Contains(t, err.Error(), "failed to create lock file")
+}
+
+func TestReleaseIsIdempotent(t *testing.T) {
+	root := t.TempDir()
+	lock, err := Acquire(root, time.Second)
+	require.NoError(t, err)
+
+	require.NoError(t, lock.Release())
+	assert.NoError(t, lock.Release(), "a second Release must be a no-op")
 }

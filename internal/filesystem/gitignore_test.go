@@ -144,3 +144,26 @@ func TestGitignoreTrailingSpacesAndDoubleStarCollapse(t *testing.T) {
 	assert.True(t, m.IsFileIgnored("a_mid_b.txt"))
 	assert.False(t, m.IsPathIgnored(".", false))
 }
+
+// TestIgnoreMatcherWithoutRootIsInert pins the zero-value contract: a matcher
+// built without a root must never claim a path is ignored, because it has no
+// rules to justify the decision.
+func TestIgnoreMatcherWithoutRootIsInert(t *testing.T) {
+	m := filesystem.NewIgnoreMatcher("", nil)
+
+	m.LoadDir("")
+	assert.False(t, m.IsDirIgnored("vendor"))
+	assert.False(t, m.IsFileIgnored("vendor/a.go"))
+	assert.False(t, m.IsPathIgnored("vendor/a.go", false))
+	assert.False(t, m.MatchIgnoredDirName("node_modules"))
+}
+
+func TestIgnoreMatcherHandlesRootRelativePaths(t *testing.T) {
+	m := filesystem.NewIgnoreMatcher(t.TempDir(), []string{"vendor", "*.gen.go"})
+
+	assert.False(t, m.IsDirIgnored(""), "the root itself is never ignored")
+	assert.False(t, m.IsFileIgnored(""), "an empty path is not a file")
+	assert.True(t, m.IsDirIgnored("vendor"))
+	assert.True(t, m.MatchIgnoredDirName("vendor"))
+	assert.True(t, m.MatchIgnoredDirName("api.gen.go"))
+}
